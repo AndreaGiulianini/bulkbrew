@@ -83,8 +83,24 @@ async function importCollection() {
 <template>
   <div class="space-y-6">
     <!-- Hero -->
-    <section class="rounded-xl bg-gradient-to-br from-emerald-950/40 via-neutral-900 to-amber-950/30 border border-neutral-800 p-5 sm:p-7">
-      <h1 class="text-2xl sm:text-3xl font-bold">
+    <section class="rounded-xl bg-gradient-to-br from-emerald-950/40 via-neutral-900 to-amber-950/30 border border-neutral-800 p-5 sm:p-7 relative">
+      <a
+        href="https://github.com/AndreaGiulianini/bulkbrew"
+        target="_blank"
+        rel="noopener noreferrer"
+        class="absolute top-4 right-4 inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-black/50 border border-neutral-800 text-xs text-neutral-300 hover:text-white hover:border-neutral-600 transition-colors"
+        aria-label="BulkBrew on GitHub"
+      >
+        <svg
+          viewBox="0 0 24 24"
+          aria-hidden="true"
+          class="w-4 h-4 fill-current"
+        >
+          <path d="M12 .5C5.73.5.5 5.73.5 12a11.5 11.5 0 0 0 7.86 10.92c.58.1.79-.25.79-.56 0-.28-.01-1.02-.02-2-3.2.7-3.88-1.54-3.88-1.54-.52-1.33-1.28-1.69-1.28-1.69-1.05-.72.08-.7.08-.7 1.16.08 1.77 1.2 1.77 1.2 1.03 1.77 2.71 1.26 3.37.96.1-.75.4-1.26.73-1.55-2.55-.29-5.24-1.28-5.24-5.69 0-1.26.45-2.28 1.19-3.08-.12-.3-.52-1.48.11-3.08 0 0 .97-.31 3.18 1.18a11 11 0 0 1 5.8 0c2.2-1.49 3.17-1.18 3.17-1.18.63 1.6.23 2.78.12 3.08.74.8 1.19 1.82 1.19 3.08 0 4.42-2.7 5.39-5.26 5.68.41.35.78 1.04.78 2.1 0 1.52-.01 2.75-.01 3.12 0 .31.21.67.8.56A11.5 11.5 0 0 0 23.5 12C23.5 5.73 18.27.5 12 .5Z" />
+        </svg>
+        <span>GitHub</span>
+      </a>
+      <h1 class="text-2xl sm:text-3xl font-bold pr-24">
         Turn your bulk into Commander decks
       </h1>
       <p class="text-neutral-300 text-sm sm:text-base mt-1 max-w-2xl">

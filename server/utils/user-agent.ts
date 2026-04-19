@@ -6,7 +6,7 @@
 export function apiUserAgent(): string {
   const ua = process.env.BULKBREW_USER_AGENT;
   if (ua) return ua;
-  return "BulkBrew/1.0 (https://github.com/andreagiulianini/bulkbrew)";
+  return "BulkBrew/1.0 (https://github.com/AndreaGiulianini/bulkbrew)";
 }
 
 export function externalFetchHeaders(): Record<string, string> {
