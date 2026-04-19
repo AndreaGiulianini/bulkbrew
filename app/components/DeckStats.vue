@@ -11,6 +11,17 @@ const totalPips = computed(() => {
   const p = props.stats.pips;
   return p.W + p.U + p.B + p.R + p.G + p.C;
 });
+
+// EDH casual norms — matches the DEFAULT_RULES.roleTargets in the deck store.
+// Kept local to the component so the UI can turn a count amber/emerald without
+// needing access to the store's current rules.
+const ROLE_TARGETS = { ramp: 8, draw: 8, removal: 5, wipe: 2 } as const;
+const ROLE_LABELS: Array<{ key: keyof typeof ROLE_TARGETS; label: string }> = [
+  { key: "ramp", label: "Ramp" },
+  { key: "draw", label: "Draw" },
+  { key: "removal", label: "Removal" },
+  { key: "wipe", label: "Wipes" },
+];
 </script>
 
 <template>
@@ -44,6 +55,27 @@ const totalPips = computed(() => {
       <span v-if="stats.planeswalkers">{{ stats.planeswalkers }} planeswalkers</span>
       <span v-if="stats.battles">{{ stats.battles }} battles</span>
       <span v-if="stats.other">{{ stats.other }} other</span>
+    </div>
+
+    <!-- Functional roles -->
+    <div>
+      <div class="text-neutral-500 text-[10px] uppercase mb-1">Functional roles</div>
+      <div class="flex gap-2 flex-wrap text-[11px]">
+        <span
+          v-for="r in ROLE_LABELS"
+          :key="r.key"
+          class="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-neutral-800"
+          :title="`Target: ${ROLE_TARGETS[r.key]}`"
+        >
+          <span class="text-neutral-500">{{ r.label }}</span>
+          <span
+            class="font-semibold tabular-nums"
+            :class="stats.roles[r.key] >= ROLE_TARGETS[r.key] ? 'text-emerald-400' : 'text-amber-400'"
+          >
+            {{ stats.roles[r.key] }}<span class="text-neutral-600">/{{ ROLE_TARGETS[r.key] }}</span>
+          </span>
+        </span>
+      </div>
     </div>
 
     <!-- Mana curve -->

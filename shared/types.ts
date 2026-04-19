@@ -87,6 +87,13 @@ export interface EdhrecPage {
   nonbasic?: number;
   deck_size?: number;
   num_decks_avg?: number;
+  // EDHREC's panels live alongside container. Currently we only read
+  // panels.mana_curve, a { cmc: avgCount } histogram used as a target during
+  // auto-fill. Other panels (piechart, rank_over_time, etc.) are untyped.
+  panels?: {
+    mana_curve?: Record<string, number>;
+    [key: string]: unknown;
+  };
 }
 
 export interface DeckCard {
@@ -96,6 +103,16 @@ export interface DeckCard {
   fromCollection: boolean;
   inclusion?: number;
   quantity?: number;
+}
+
+export interface DeckRoles {
+  ramp: number;
+  draw: number;
+  removal: number;
+  wipe: number;
+  protection: number;
+  recursion: number;
+  tutor: number;
 }
 
 export interface DeckStats {
@@ -112,6 +129,7 @@ export interface DeckStats {
   curve: number[];
   pips: { W: number; U: number; B: number; R: number; G: number; C: number };
   avgCmc: number;
+  roles: DeckRoles;
 }
 
 export interface DeckSession {

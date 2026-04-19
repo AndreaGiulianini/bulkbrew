@@ -1,8 +1,10 @@
 import { defineStore } from "pinia";
+import { type CardRole, detectRoles } from "~/utils/card-roles";
 import { edhrecSlug } from "~/utils/slug";
 import type {
   CategorizedRecs,
   DeckCard,
+  DeckRoles,
   DeckSession,
   DeckStats,
   EdhrecCard,
@@ -12,11 +14,19 @@ import type {
 } from "~~/shared/types";
 import { useCollectionStore } from "./collection";
 
+export interface RoleTargets {
+  ramp: number;
+  draw: number;
+  removal: number;
+  wipe: number;
+}
+
 export interface BuildRules {
   landTarget: number;
   synergyWeight: number;
   fillMissing: boolean;
   maxCmc: number;
+  roleTargets: RoleTargets;
 }
 
 const DEFAULT_RULES: BuildRules = {
@@ -24,7 +34,19 @@ const DEFAULT_RULES: BuildRules = {
   synergyWeight: 0.5,
   fillMissing: true,
   maxCmc: 10,
+  // EDH casual baseline: 8 ramp / 8 draw / 5 removal / 2 wipes.
+  roleTargets: { ramp: 8, draw: 8, removal: 5, wipe: 2 },
 };
+
+const DEFICIT_ROLES = ["ramp", "draw", "removal", "wipe"] as const;
+type DeficitRole = (typeof DEFICIT_ROLES)[number];
+function isDeficitRole(r: CardRole): r is DeficitRole {
+  return (DEFICIT_ROLES as readonly CardRole[]).includes(r);
+}
+
+function emptyDeckRoles(): DeckRoles {
+  return { ramp: 0, draw: 0, removal: 0, wipe: 0, protection: 0, recursion: 0, tutor: 0 };
+}
 
 interface State {
   session: DeckSession | null;
@@ -108,6 +130,7 @@ export const useDeckStore = defineStore("deck", {
         curve: [0, 0, 0, 0, 0, 0, 0, 0],
         pips: { W: 0, U: 0, B: 0, R: 0, G: 0, C: 0 },
         avgCmc: 0,
+        roles: emptyDeckRoles(),
       };
       let cmcSum = 0;
       let cmcCount = 0;
@@ -167,6 +190,15 @@ export const useDeckStore = defineStore("deck", {
           for (const color of identitySource) {
             if (color in stats.pips) stats.pips[color as keyof typeof stats.pips] += qty;
           }
+        }
+
+        // Role detection runs on every non-commander non-land card with oracle
+        // text. Lands are excluded — "destroy target" on a utility land is
+        // still removal technically, but EDH convention counts roles against
+        // the spellbook, not the mana base.
+        if (c.category !== "commander" && group !== "Lands" && sc?.oracle_text) {
+          const roles = detectRoles(sc.oracle_text, sc.type_line);
+          for (const r of roles) stats.roles[r] += qty;
         }
       }
       stats.avgCmc = cmcCount > 0 ? cmcSum / cmcCount : 0;
@@ -367,13 +399,75 @@ export const useDeckStore = defineStore("deck", {
         topcards: 3,
       };
 
-      // Sort score: inclusion dominates (staples matter), synergy adds a bonus for
-      // on-archetype cards. The synergy weight is user-tunable via build rules.
+      // Role / curve bookkeeping — used both by the Step 3.5 deficit pass and
+      // as tiebreakers in the Step 3b / Step 4 score function. Counts start
+      // from whatever Step 3 put in the deck (the commander is skipped).
+      const roleCounts: Record<CardRole, number> = {
+        ramp: 0,
+        draw: 0,
+        removal: 0,
+        wipe: 0,
+        protection: 0,
+        recursion: 0,
+        tutor: 0,
+      };
+      const rolesOf = (name: string): Set<CardRole> => {
+        const sc = collection.getScryfall(name);
+        if (!sc?.oracle_text) return new Set();
+        return detectRoles(sc.oracle_text, sc.type_line);
+      };
+      const bumpRoles = (name: string) => {
+        for (const r of rolesOf(name)) roleCounts[r] += 1;
+      };
+      // Curve target: EDHREC's per-commander mana_curve panel is a simple
+      // {cmc: avgCount} histogram. When it's missing, we fall back to a flat
+      // target so the bonus becomes a no-op.
+      const curveTarget: Record<number, number> = {};
+      if (edhrec.panels?.mana_curve) {
+        for (const [k, v] of Object.entries(edhrec.panels.mana_curve)) {
+          const bucket = Math.min(7, Number(k));
+          curveTarget[bucket] = (curveTarget[bucket] ?? 0) + Number(v);
+        }
+      }
+      const curveCounts: Record<number, number> = {};
+
+      // Sort score: inclusion dominates (staples matter), synergy adds a bonus
+      // for on-archetype cards, plus two tiebreakers — a small role bonus that
+      // prefers cards covering still-missing roles, and a curve bonus that
+      // prefers cards whose CMC bucket is below the commander's target curve.
       const synWeight = Math.max(0, Math.min(1, rules.synergyWeight));
-      const score = (c: { num_decks?: number; potential_decks?: number; synergy?: number }) => {
+      const score = (c: {
+        name?: string;
+        num_decks?: number;
+        potential_decks?: number;
+        synergy?: number;
+      }) => {
         const incl = inclusionPct(c);
         const syn = Math.max(0, Math.min(1, c.synergy ?? 0));
-        return incl + synWeight * syn;
+        let base = incl + synWeight * syn;
+        if (c.name) {
+          const sc = collection.getScryfall(c.name);
+          if (sc?.oracle_text) {
+            const roles = detectRoles(sc.oracle_text, sc.type_line);
+            for (const r of roles) {
+              if (isDeficitRole(r) && roleCounts[r] < rules.roleTargets[r]) {
+                base += 0.1;
+              }
+            }
+          }
+          if (sc?.cmc !== undefined) {
+            const bucket = Math.min(7, Math.max(0, Math.floor(sc.cmc)));
+            const deficit = (curveTarget[bucket] ?? 0) - (curveCounts[bucket] ?? 0);
+            if (deficit > 0) base += 0.05;
+          }
+        }
+        return base;
+      };
+      const bumpCurve = (name: string) => {
+        const sc = collection.getScryfall(name);
+        if (sc?.cmc === undefined) return;
+        const bucket = Math.min(7, Math.max(0, Math.floor(sc.cmc)));
+        curveCounts[bucket] = (curveCounts[bucket] ?? 0) + 1;
       };
 
       // Per-type caps derived from EDHREC's top-level composition. These bound
@@ -395,12 +489,18 @@ export const useDeckStore = defineStore("deck", {
         const sc = collection.getScryfall(name);
         return sc?.type_line ? classifyType(sc.type_line) : "Other";
       };
-      // Seed counts from whatever is already in the deck (in practice just the
-      // commander after startSession).
+      // Seed counts from whatever is already in the deck (usually just the
+      // commander after startSession, but could include an imported deck).
       for (const c of this.session.cards) {
         if (c.category === "commander") continue;
         const t = typeOf(c.name);
         typeCounts[t] = (typeCounts[t] ?? 0) + (c.quantity ?? 1);
+        for (const r of rolesOf(c.name)) roleCounts[r] += c.quantity ?? 1;
+        const sc = collection.getScryfall(c.name);
+        if (sc?.cmc !== undefined && !/Land/.test(sc.type_line ?? "")) {
+          const bucket = Math.min(7, Math.max(0, Math.floor(sc.cmc)));
+          curveCounts[bucket] = (curveCounts[bucket] ?? 0) + (c.quantity ?? 1);
+        }
       }
       const wouldExceedTypeCap = (name: string): boolean => {
         const t = typeOf(name);
@@ -495,10 +595,59 @@ export const useDeckStore = defineStore("deck", {
             inclusion: inclusionPct(c),
           });
           bumpTypeCount(c.name);
+          bumpRoles(c.name);
+          bumpCurve(c.name);
           addedThisCat++;
           nonLandAdded++;
         }
         if (nonLandAdded >= nonLandBudget) break;
+      }
+
+      // Step 3.5: Role-deficit fill. After the per-type EDHREC targets have
+      // established the deck's character, make sure the functional baseline is
+      // there — ramp, draw, removal, wipes — before the generic spill runs.
+      // Without this a Juri deck would finish as "right shape, unplayable
+      // because it only has 3 ramp spells and no board wipe".
+      for (const role of DEFICIT_ROLES) {
+        if (nonLandAdded >= nonLandBudget) break;
+        const target = rules.roleTargets[role];
+        let deficit = target - roleCounts[role];
+        if (deficit <= 0) continue;
+
+        const candidates: EdhrecCard[] = [];
+        const seen = new Set<string>();
+        for (const list of lists) {
+          if (landCategories.has(list.tag)) continue;
+          for (const c of list.cardviews) {
+            const key = c.name.toLowerCase();
+            if (seen.has(key)) continue;
+            if (this.deckNames.has(key)) continue;
+            if (!isEdhrecCastable(c)) continue;
+            if (!collection.isOwned(c.name)) continue;
+            if (wouldExceedTypeCap(c.name)) continue;
+            if (!rolesOf(c.name).has(role)) continue;
+            seen.add(key);
+            candidates.push(c);
+          }
+        }
+        candidates.sort((a, b) => score(b) - score(a));
+
+        for (const c of candidates) {
+          if (deficit <= 0 || nonLandAdded >= nonLandBudget) break;
+          const ownedCard = collection.getOwned(c.name);
+          this.addCard({
+            name: c.name,
+            category: `role:${role}`,
+            scryfallId: ownedCard?.scryfallId,
+            fromCollection: true,
+            inclusion: inclusionPct(c),
+          });
+          bumpTypeCount(c.name);
+          bumpRoles(c.name);
+          bumpCurve(c.name);
+          deficit--;
+          nonLandAdded++;
+        }
       }
 
       // Step 3b: Spill any remaining owned EDHREC-recommended cards past per-category
@@ -535,6 +684,8 @@ export const useDeckStore = defineStore("deck", {
             inclusion: inclusionPct(cv),
           });
           bumpTypeCount(cv.name);
+          bumpRoles(cv.name);
+          bumpCurve(cv.name);
           nonLandAdded++;
         }
       }
@@ -565,6 +716,8 @@ export const useDeckStore = defineStore("deck", {
             fromCollection: true,
           });
           bumpTypeCount(card.name);
+          bumpRoles(card.name);
+          bumpCurve(card.name);
           nonLandAdded++;
         }
       }
