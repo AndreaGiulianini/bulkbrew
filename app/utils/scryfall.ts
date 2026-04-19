@@ -22,9 +22,15 @@ const BATCH_COOLDOWN_MS = 250;
 // out of the remaining batches and let the caller surface the gap.
 const FAILURE_CIRCUIT_BREAK = 2;
 
+// Scryfall's /cards/collection endpoint accepts any of these identifier
+// shapes per entry; we use `id` for collection enrichment, `name` for
+// plain-text deck list imports, and `{set, collector_number}` for
+// Moxfield exports which carry neither a Scryfall ID nor just a name.
 export interface ScryfallIdentifier {
   id?: string;
   name?: string;
+  set?: string;
+  collector_number?: string;
 }
 
 export async function getCardById(id: string): Promise<ScryfallCard | null> {
@@ -105,8 +111,16 @@ export async function resolveIdentifiers(
             ONE_WEEK_MS,
           )
         : null;
-    if (cached) results.push(cached);
-    else if (ident.id || ident.name) toFetch.push(ident);
+    if (cached) {
+      results.push(cached);
+      continue;
+    }
+    // Accept any identifier shape Scryfall supports: {id}, {name}, or
+    // {set, collector_number}. The last one is used by the Moxfield
+    // importer and has no cache key, so it always falls through to fetch.
+    if (ident.id || ident.name || (ident.set && ident.collector_number)) {
+      toFetch.push(ident);
+    }
   }
 
   let consecutiveFailures = 0;

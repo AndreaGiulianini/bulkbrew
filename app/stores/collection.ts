@@ -76,10 +76,15 @@ export const useCollectionStore = defineStore("collection", {
       await this.importFromText(text, file.name);
     },
 
-    // Accepts either a ManaBox-style CSV (with "Scryfall ID" header) or a plain
-    // deck-list-style text (e.g. Moxfield collection export, or handwritten
-    // "1 Card Name" lines). Non-CSV input is resolved via Scryfall so we can
-    // attach the Scryfall IDs the rest of the app expects.
+    // Dispatches across three import formats:
+    //   1. ManaBox CSV — detected by a "Scryfall ID" column; carries IDs
+    //      directly, no Scryfall lookup needed for the import itself.
+    //   2. Moxfield collection CSV — detected by Count/Name/Edition/Collector
+    //      Number columns; resolved via {set, collector_number} for exact
+    //      printing match.
+    //   3. Plain deck-list text — "1 Sol Ring" style; resolved via name.
+    // All paths end up with a `CollectionCard[]` carrying stable Scryfall
+    // IDs so the rest of the app can enrich uniformly.
     async importFromText(
       text: string,
       _filename = "imported-collection.csv",
@@ -87,12 +92,20 @@ export const useCollectionStore = defineStore("collection", {
       if (!text.trim()) {
         throw new Error("The import is empty. Paste a card list or upload a CSV.");
       }
-      const firstLine = text.split(/\r?\n/, 1)[0] ?? "";
-      const isStructuredCsv = /name/i.test(firstLine) && /scryfall\s*id/i.test(firstLine);
+      const firstLineLower = (text.split(/\r?\n/, 1)[0] ?? "").toLowerCase();
+      const isManaBox = /\bname\b/.test(firstLineLower) && /\bscryfall\s*id\b/.test(firstLineLower);
+      const isMoxfield =
+        !isManaBox &&
+        /\bcount\b/.test(firstLineLower) &&
+        /\bname\b/.test(firstLineLower) &&
+        /\bedition\b/.test(firstLineLower) &&
+        /\bcollector number\b/.test(firstLineLower);
 
-      const { cards, notFound } = isStructuredCsv
+      const { cards, notFound } = isManaBox
         ? parseManaBoxCsv(text)
-        : await resolveDeckText(text);
+        : isMoxfield
+          ? await parseMoxfieldCsv(text)
+          : await resolveDeckText(text);
 
       if (!cards.length) {
         throw new Error(
@@ -203,6 +216,104 @@ function parseManaBoxCsv(csv: string): { cards: CollectionCard[]; notFound: stri
       });
     }
   }
+  const cards = Array.from(byScryfall.values()).sort((a, b) => a.name.localeCompare(b.name));
+  return { cards, notFound };
+}
+
+// Moxfield collection CSV → CollectionCard[]. Moxfield exports don't
+// include a Scryfall ID, so we use the `{set, collector_number}`
+// identifier type on /cards/collection for an exact printing match.
+// That preserves the user's own foil / condition / language metadata
+// instead of collapsing every copy onto Scryfall's default printing.
+async function parseMoxfieldCsv(
+  csv: string,
+): Promise<{ cards: CollectionCard[]; notFound: string[] }> {
+  const parsed = Papa.parse<Record<string, string>>(csv, {
+    header: true,
+    skipEmptyLines: true,
+  });
+
+  // Keep the parsed row alongside its identifier so we can marry Scryfall's
+  // response back to the user's original metadata (condition, foil, …).
+  interface Pending {
+    row: Record<string, string>;
+    identifier: ScryfallIdentifier;
+    printingKey: string; // `${set}/${collector}` or `name:${lower}`
+  }
+  const pending: Pending[] = [];
+  for (const row of parsed.data) {
+    const name = (row.Name ?? "").trim();
+    if (!name) continue;
+    const edition = (row.Edition ?? "").trim().toLowerCase();
+    const collector = (row["Collector Number"] ?? "").trim();
+    if (edition && collector) {
+      pending.push({
+        row,
+        identifier: { set: edition, collector_number: collector },
+        printingKey: `${edition}/${collector}`,
+      });
+    } else {
+      pending.push({
+        row,
+        identifier: { name },
+        printingKey: `name:${name.toLowerCase()}`,
+      });
+    }
+  }
+
+  if (!pending.length) {
+    throw new Error("Moxfield CSV is empty or has no recognizable rows.");
+  }
+
+  const { data } = await resolveIdentifiers(pending.map((p) => p.identifier));
+
+  // Index resolved Scryfall cards by both keys we might look up with.
+  const byPrinting = new Map<string, ScryfallCard>();
+  for (const card of data) {
+    if (card.set && card.collector_number) {
+      byPrinting.set(`${card.set}/${card.collector_number}`, card);
+    }
+    if (card.name) {
+      byPrinting.set(`name:${card.name.toLowerCase()}`, card);
+    }
+  }
+
+  const byScryfall = new Map<string, CollectionCard>();
+  const notFound: string[] = [];
+  for (const p of pending) {
+    const sc = byPrinting.get(p.printingKey);
+    if (!sc) {
+      notFound.push(p.row.Name ?? "(unnamed)");
+      continue;
+    }
+    const quantity = Number.parseInt(p.row.Count ?? "0", 10) || 0;
+    if (quantity <= 0) continue;
+    const entry = makeEntry({
+      name: sc.name,
+      scryfallId: sc.id,
+      quantity,
+      setCode: sc.set ?? "",
+      setName: sc.set_name ?? "",
+      collectorNumber: sc.collector_number ?? "",
+      rarity: sc.rarity ?? "",
+      foil: p.row.Foil ?? "",
+      condition: p.row.Condition ?? "",
+      language: p.row.Language ?? "",
+    });
+    const existing = byScryfall.get(sc.id);
+    if (existing) {
+      existing.quantity += quantity;
+      existing.copies.push(entry);
+    } else {
+      byScryfall.set(sc.id, {
+        name: sc.name,
+        scryfallId: sc.id,
+        quantity,
+        copies: [entry],
+      });
+    }
+  }
+
   const cards = Array.from(byScryfall.values()).sort((a, b) => a.name.localeCompare(b.name));
   return { cards, notFound };
 }
