@@ -334,11 +334,15 @@ export const useDeckStore = defineStore("deck", {
           ...DEFAULT_RULES,
           landTarget: Math.max(30, Math.min(42, data.land ?? DEFAULT_RULES.landTarget)),
         };
-        const names = new Set<string>();
-        for (const list of data.container?.json_dict?.cardlists ?? []) {
-          for (const cv of list.cardviews) names.add(cv.name);
-        }
-        await collection.enrichNames(Array.from(names));
+        // Deliberately NOT pre-warming Scryfall data for every EDHREC
+        // recommendation here. That would fire 6–8 batched POSTs against
+        // Scryfall on every /build mount with a cold cache and blow through
+        // their rate limit (CORS-less 429s that we can't even read). The
+        // only place this data is used is the unowned-recs color filter in
+        // the `categories` getter — without it, the missing-recs panel
+        // shows a few out-of-color cards, which is strictly cosmetic. All
+        // autofill loops operate on OWNED cards, which are enriched once
+        // at collection load time.
       } catch (err) {
         this.error = err instanceof Error ? err.message : String(err);
       } finally {

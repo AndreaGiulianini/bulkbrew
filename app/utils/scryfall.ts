@@ -9,10 +9,18 @@ import type { ScryfallCard } from "~~/shared/types";
 
 const ONE_WEEK_MS = 7 * 24 * 60 * 60 * 1000;
 const BATCH_SIZE = 75; // Scryfall's limit for /cards/collection identifiers
-// Scryfall's guidelines ask for 50–100 ms between requests. 100 ms keeps us
-// well clear of their throttle and, at BATCH_SIZE=75, lets a 1000-card
-// collection resolve in under 2 seconds of inter-batch waits.
-const BATCH_COOLDOWN_MS = 100;
+// Scryfall's guidelines ask for 50–100 ms between requests, but every POST
+// here triggers a CORS preflight (application/json body), so 1 batch = 2
+// network requests. 250 ms keeps us under 4 req/sec including preflights,
+// which is well below Scryfall's observed ~10 req/sec throttle and leaves
+// headroom for users on shared IPs (VPN / office NAT).
+const BATCH_COOLDOWN_MS = 250;
+// Stop issuing new Scryfall batches after this many back-to-back network
+// failures. Scryfall's 429 responses don't include CORS headers, which
+// means the browser refuses us the response entirely and our retry logic
+// can't read Retry-After. Rather than hammer the API while throttled, bail
+// out of the remaining batches and let the caller surface the gap.
+const FAILURE_CIRCUIT_BREAK = 2;
 
 export interface ScryfallIdentifier {
   id?: string;
@@ -101,9 +109,16 @@ export async function resolveIdentifiers(
     else if (ident.id || ident.name) toFetch.push(ident);
   }
 
+  let consecutiveFailures = 0;
   for (let i = 0; i < toFetch.length; i += BATCH_SIZE) {
-    if (i > 0) await sleep(BATCH_COOLDOWN_MS);
     const batch = toFetch.slice(i, i + BATCH_SIZE);
+    if (consecutiveFailures >= FAILURE_CIRCUIT_BREAK) {
+      // We're almost certainly being rate-limited; bail on the remaining
+      // batches and let the caller report the gap via `notFound`.
+      notFound.push(...batch);
+      continue;
+    }
+    if (i > 0) await sleep(BATCH_COOLDOWN_MS);
     try {
       const resp = await fetchWithRetry<{
         data: ScryfallCard[];
@@ -115,6 +130,7 @@ export async function resolveIdentifiers(
         retry: 1,
         retryDelay: 300,
       });
+      consecutiveFailures = 0;
       const writes: Array<{ namespace: string; key: string; value: ScryfallCard }> = [];
       for (const card of resp.data) {
         if (card.id) writes.push({ namespace: "scryfall-card", key: `id:${card.id}`, value: card });
@@ -130,7 +146,11 @@ export async function resolveIdentifiers(
       await writeCacheMany(writes);
       if (resp.not_found?.length) notFound.push(...resp.not_found);
     } catch {
+      consecutiveFailures += 1;
       notFound.push(...batch);
+      // A cool-down period longer than the normal batch gap gives the
+      // rate-limit window time to slide if we're only briefly throttled.
+      await sleep(1000);
     }
   }
 
