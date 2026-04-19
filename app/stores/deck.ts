@@ -376,6 +376,43 @@ export const useDeckStore = defineStore("deck", {
         return incl + synWeight * syn;
       };
 
+      // Per-type caps derived from EDHREC's top-level composition. These bound
+      // how many of each Scryfall type we'll include so the generic / overlay
+      // EDHREC categories (gamechangers, topcards, highsynergycards — most of
+      // which happen to be artifacts) can't flood a non-artifact deck with 25+
+      // mana rocks and utility artifacts.
+      const typeCaps: Record<string, number> = {
+        Creatures: edhrec.creature ?? 28,
+        Instants: edhrec.instant ?? 10,
+        Sorceries: edhrec.sorcery ?? 8,
+        Artifacts: edhrec.artifact ?? 15,
+        Enchantments: edhrec.enchantment ?? 5,
+        Planeswalkers: edhrec.planeswalker ?? 2,
+        Battles: edhrec.battle ?? 0,
+      };
+      const typeCounts: Record<string, number> = {};
+      const typeOf = (name: string): string => {
+        const sc = collection.getScryfall(name);
+        return sc?.type_line ? classifyType(sc.type_line) : "Other";
+      };
+      // Seed counts from whatever is already in the deck (in practice just the
+      // commander after startSession).
+      for (const c of this.session.cards) {
+        if (c.category === "commander") continue;
+        const t = typeOf(c.name);
+        typeCounts[t] = (typeCounts[t] ?? 0) + (c.quantity ?? 1);
+      }
+      const wouldExceedTypeCap = (name: string): boolean => {
+        const t = typeOf(name);
+        const cap = typeCaps[t];
+        if (cap === undefined) return false;
+        return (typeCounts[t] ?? 0) >= cap;
+      };
+      const bumpTypeCount = (name: string): void => {
+        const t = typeOf(name);
+        typeCounts[t] = (typeCounts[t] ?? 0) + 1;
+      };
+
       // Step 1: Add EDHREC non-basic lands (owned, all of them up to LAND_TARGET)
       for (const list of lists) {
         if (!landCategories.has(list.tag)) continue;
@@ -457,6 +494,7 @@ export const useDeckStore = defineStore("deck", {
             fromCollection: true,
             inclusion: inclusionPct(c),
           });
+          bumpTypeCount(c.name);
           addedThisCat++;
           nonLandAdded++;
         }
@@ -465,7 +503,9 @@ export const useDeckStore = defineStore("deck", {
 
       // Step 3b: Spill any remaining owned EDHREC-recommended cards past per-category
       // targets. Cards suggested for this commander are always preferred over cards
-      // that just have a good global edhrec_rank.
+      // that just have a good global edhrec_rank. Respects per-type caps so overlay
+      // tags (gamechangers / topcards / highsynergy — often dominated by artifacts)
+      // don't push a single type past its EDHREC-averaged count.
       if (nonLandAdded < nonLandBudget) {
         const spill: Array<{ cv: EdhrecCard; tag: string }> = [];
         for (const list of lists) {
@@ -485,6 +525,7 @@ export const useDeckStore = defineStore("deck", {
           seen.add(key);
           if (nonLandAdded >= nonLandBudget) break;
           if (this.deckNames.has(key)) continue;
+          if (wouldExceedTypeCap(cv.name)) continue;
           const ownedCard = collection.getOwned(cv.name);
           this.addCard({
             name: cv.name,
@@ -493,12 +534,16 @@ export const useDeckStore = defineStore("deck", {
             fromCollection: true,
             inclusion: inclusionPct(cv),
           });
+          bumpTypeCount(cv.name);
           nonLandAdded++;
         }
       }
 
       // Step 4: If non-land budget not exhausted, fill with any owned non-land card
-      // by edhrec_rank. Non-basic lands outside EDHREC are NEVER added.
+      // by edhrec_rank. Non-basic lands outside EDHREC are NEVER added. Type caps
+      // apply here too — without them, Step 4 sorts by global edhrec_rank which
+      // puts Sol Ring / Arcane Signet / other mana rocks at the top and would
+      // flood the deck with artifacts regardless of the commander's archetype.
       if (nonLandAdded < nonLandBudget) {
         const remaining: Array<{ card: (typeof collection.cards)[number]; sc: ScryfallCard }> = [];
         for (const c of collection.cards) {
@@ -512,12 +557,14 @@ export const useDeckStore = defineStore("deck", {
         remaining.sort((a, b) => (a.sc.edhrec_rank ?? 99999) - (b.sc.edhrec_rank ?? 99999));
         for (const { card, sc } of remaining) {
           if (nonLandAdded >= nonLandBudget) break;
+          if (wouldExceedTypeCap(card.name)) continue;
           this.addCard({
             name: card.name,
             category: classifyType(sc.type_line).toLowerCase(),
             scryfallId: card.scryfallId,
             fromCollection: true,
           });
+          bumpTypeCount(card.name);
           nonLandAdded++;
         }
       }
