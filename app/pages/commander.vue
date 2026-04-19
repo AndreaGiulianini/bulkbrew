@@ -2,6 +2,7 @@
 import { computed, onMounted, ref } from "vue";
 import { useCollectionStore } from "~/stores/collection";
 import { useDeckStore } from "~/stores/deck";
+import { resolveCommanderRanks } from "~/utils/edhrec";
 import { edhrecSlug } from "~/utils/slug";
 
 const collection = useCollectionStore();
@@ -34,11 +35,7 @@ async function loadLiveRanks() {
     return;
   }
   try {
-    const resp = await $fetch<{ ranks: Record<string, number | null> }>("/api/edhrec/ranks", {
-      method: "POST",
-      body: { slugs },
-    });
-    liveRanks.value = resp.ranks;
+    liveRanks.value = await resolveCommanderRanks(slugs);
   } catch {
     // Silent — we fall back to Scryfall's rank per-card.
   } finally {

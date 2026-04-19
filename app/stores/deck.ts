@@ -1,5 +1,6 @@
 import { defineStore } from "pinia";
 import { type CardRole, detectRoles } from "~/utils/card-roles";
+import { getCommanderPage } from "~/utils/edhrec";
 import { edhrecSlug } from "~/utils/slug";
 import type {
   CategorizedRecs,
@@ -13,6 +14,7 @@ import type {
   ScryfallCard,
 } from "~~/shared/types";
 import { useCollectionStore } from "./collection";
+import { useSessionsStore } from "./sessions";
 
 export interface RoleTargets {
   ramp: number;
@@ -313,7 +315,10 @@ export const useDeckStore = defineStore("deck", {
       this.error = null;
       try {
         const s = edhrecSlug(this.session.commanderName);
-        const data = await $fetch<EdhrecPage>(`/api/edhrec/commander/${s}`);
+        const data = await getCommanderPage(s);
+        if (!data) {
+          throw new Error(`EDHREC has no page for "${this.session.commanderName}".`);
+        }
         this.edhrec = data;
         this.rules = {
           ...DEFAULT_RULES,
@@ -861,10 +866,8 @@ export const useDeckStore = defineStore("deck", {
 
     async save() {
       if (!this.session) return;
-      await $fetch("/api/sessions", {
-        method: "POST",
-        body: this.session,
-      });
+      const sessions = useSessionsStore();
+      await sessions.upsert({ ...this.session });
     },
 
     exportText(): string {

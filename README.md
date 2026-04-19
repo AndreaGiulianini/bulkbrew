@@ -54,7 +54,12 @@ are flagged as missing so you know exactly what to buy.
 - **[Biome](https://biomejs.dev)** for lint + format
 
 **External data**: Scryfall (card data) and EDHREC (commander recommendations
-and themes), both proxied and cached on disk for 1 week / 1 day respectively.
+and themes), called directly from the browser and cached in IndexedDB for
+1 week / 1 day respectively.
+
+**Hosting**: pure static site. Deployed to Vercel's hobby tier (free) — no
+serverless functions, no server runtime. Your collection, sessions and the
+external-API cache all live in your browser (IndexedDB).
 
 ## Quick start
 
@@ -68,25 +73,36 @@ npm run dev
 Opens on `http://localhost:3000`. On first load the collection is empty —
 import yours from the homepage.
 
-Build for production:
+Build for production (Vercel-compatible static output):
 
 ```bash
 npm run build
-npm run preview
+# Emits .vercel/output/static/ — pure static files, no functions.
 ```
+
+Preview the built bundle locally with any static server, e.g.:
+
+```bash
+npx serve .vercel/output/static
+```
+
+## Deployment
+
+The repo deploys to Vercel with zero config:
+
+1. Connect this GitHub repo in the Vercel dashboard.
+2. Vercel auto-detects Nuxt, runs `npm run build`, and serves
+   `.vercel/output/static/` from the CDN.
+3. No environment variables are required.
+
+Because there are no serverless functions or server runtime, the project
+fits inside Vercel's **hobby (free) tier** indefinitely, even under heavy
+traffic — only CDN bandwidth counts, and the bundle is small.
 
 ## Configuration
 
-All runtime paths default to locations inside the project root so the app
-works out of the box. Override with env vars if you want runtime data on a
-separate volume:
-
-| Variable | Default | Purpose |
-|---|---|---|
-| `COLLECTION_PATH` | `./ManaBox_Collection.csv` | Where the uploaded collection CSV is persisted |
-| `CACHE_DIR` | `./.cache` | Scryfall + EDHREC JSON cache (auto-swept after 30 days) |
-| `SESSIONS_DIR` | `./.sessions` | Saved deck sessions |
-| `BULKBREW_USER_AGENT` | `BulkBrew/1.0 (<contact>)` | User-Agent sent to Scryfall & EDHREC |
+There is no runtime config — everything runs in the browser. The only
+persisted state lives in IndexedDB on your device.
 
 ## How the auto-fill works
 

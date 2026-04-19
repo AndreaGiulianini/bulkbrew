@@ -71,6 +71,7 @@ export interface EdhrecPage {
         name: string;
         image_uris?: string[][];
         color_identity?: string[];
+        rank?: number;
       };
       cardlists?: EdhrecCategory[];
     };
