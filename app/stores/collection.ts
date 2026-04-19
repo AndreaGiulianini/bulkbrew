@@ -101,23 +101,30 @@ export const useCollectionStore = defineStore("collection", {
         /\bedition\b/.test(firstLineLower) &&
         /\bcollector number\b/.test(firstLineLower);
 
-      const { cards, notFound } = isManaBox
+      const parsed: ParsedCollection = isManaBox
         ? parseManaBoxCsv(text)
         : isMoxfield
           ? await parseMoxfieldCsv(text)
           : await resolveDeckText(text);
 
-      if (!cards.length) {
+      if (!parsed.cards.length) {
         throw new Error(
-          `No cards could be matched against Scryfall (${notFound.length} name${notFound.length === 1 ? "" : "s"} unresolved).`,
+          `No cards could be matched against Scryfall (${parsed.notFound.length} name${parsed.notFound.length === 1 ? "" : "s"} unresolved).`,
         );
       }
 
-      await saveDoc("collection", COLLECTION_KEY, cards);
-      this.cards = cards;
-      this.scryfallByName = new Map();
-      await this.enrichWithScryfall();
-      return { imported: cards.length, notFound };
+      await saveDoc("collection", COLLECTION_KEY, parsed.cards);
+      this.cards = parsed.cards;
+      // If the parser already resolved Scryfall data (Moxfield / plain text
+      // both do), reuse it directly. Only the ManaBox path needs a separate
+      // Scryfall pass since its CSV carries only IDs.
+      if (parsed.scryfallByName) {
+        this.scryfallByName = parsed.scryfallByName;
+      } else {
+        this.scryfallByName = new Map();
+        await this.enrichWithScryfall();
+      }
+      return { imported: parsed.cards.length, notFound: parsed.notFound };
     },
 
     async enrichWithScryfall() {
@@ -177,7 +184,10 @@ function makeEntry(
 }
 
 // ManaBox CSV → CollectionCard[] aggregated by Scryfall ID.
-function parseManaBoxCsv(csv: string): { cards: CollectionCard[]; notFound: string[] } {
+// Note: no Scryfall fetch happens here (IDs are in the CSV), so the
+// returned ParsedCollection carries no `scryfallByName` — the caller
+// runs enrichWithScryfall() afterwards.
+function parseManaBoxCsv(csv: string): ParsedCollection {
   const parsed = Papa.parse<Record<string, string>>(csv, {
     header: true,
     skipEmptyLines: true,
@@ -225,9 +235,17 @@ function parseManaBoxCsv(csv: string): { cards: CollectionCard[]; notFound: stri
 // identifier type on /cards/collection for an exact printing match.
 // That preserves the user's own foil / condition / language metadata
 // instead of collapsing every copy onto Scryfall's default printing.
-async function parseMoxfieldCsv(
-  csv: string,
-): Promise<{ cards: CollectionCard[]; notFound: string[] }> {
+// When a parser has already resolved Scryfall cards during its own pass
+// (Moxfield and plain-text both do), importFromText can skip the subsequent
+// `enrichWithScryfall()` round-trip — which on a 1 200-card import is ~3–6 s
+// of pure IDB read overhead — by using this already-in-memory map instead.
+type ParsedCollection = {
+  cards: CollectionCard[];
+  notFound: string[];
+  scryfallByName?: Map<string, ScryfallCard>;
+};
+
+async function parseMoxfieldCsv(csv: string): Promise<ParsedCollection> {
   const parsed = Papa.parse<Record<string, string>>(csv, {
     header: true,
     skipEmptyLines: true,
@@ -269,12 +287,14 @@ async function parseMoxfieldCsv(
 
   // Index resolved Scryfall cards by both keys we might look up with.
   const byPrinting = new Map<string, ScryfallCard>();
+  const scryfallByName = new Map<string, ScryfallCard>();
   for (const card of data) {
     if (card.set && card.collector_number) {
       byPrinting.set(`${card.set}/${card.collector_number}`, card);
     }
     if (card.name) {
       byPrinting.set(`name:${card.name.toLowerCase()}`, card);
+      scryfallByName.set(card.name.toLowerCase(), card);
     }
   }
 
@@ -315,7 +335,7 @@ async function parseMoxfieldCsv(
   }
 
   const cards = Array.from(byScryfall.values()).sort((a, b) => a.name.localeCompare(b.name));
-  return { cards, notFound };
+  return { cards, notFound, scryfallByName };
 }
 
 // Plain deck-list-style text (Moxfield, MTGO, Arena, handwritten) → resolve
@@ -325,9 +345,7 @@ async function parseMoxfieldCsv(
 // copy metadata the ManaBox CSV preserves (foil, condition, language,
 // binder) is not recoverable from a plain deck list, so the merged entry
 // gets a single synthetic copy with empty strings for those fields.
-async function resolveDeckText(
-  text: string,
-): Promise<{ cards: CollectionCard[]; notFound: string[] }> {
+async function resolveDeckText(text: string): Promise<ParsedCollection> {
   const parsed = parseDeckList(text);
   const entries = [...parsed.commanders, ...parsed.mainboard, ...parsed.sideboard];
   if (!entries.length) {
@@ -375,5 +393,5 @@ async function resolveDeckText(
     });
   }
   cards.sort((a, b) => a.name.localeCompare(b.name));
-  return { cards, notFound };
+  return { cards, notFound, scryfallByName: scByName };
 }
