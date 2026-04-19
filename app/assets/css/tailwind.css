@@ -1,0 +1,45 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+html {
+  font-size: 16px;
+}
+@media (min-width: 768px) {
+  html {
+    font-size: 20px;
+  }
+}
+
+html,
+body,
+#__nuxt {
+  background: #272727;
+  color: #e5e7eb;
+  min-height: 100vh;
+}
+
+.mana-W {
+  background: #fffbd5;
+  color: #000;
+}
+.mana-U {
+  background: #aae0fa;
+  color: #000;
+}
+.mana-B {
+  background: #cbc2bf;
+  color: #000;
+}
+.mana-R {
+  background: #f9aa8f;
+  color: #000;
+}
+.mana-G {
+  background: #9bd3ae;
+  color: #000;
+}
+.mana-C {
+  background: #ccc2c0;
+  color: #000;
+}

@@ -1,0 +1,26 @@
+{
+  "name": "bulkbrew",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "node scripts/run-nuxt.mjs dev",
+    "build": "node scripts/run-nuxt.mjs build",
+    "preview": "node scripts/run-nuxt.mjs preview",
+    "postinstall": "nuxt prepare",
+    "lint": "biome check .",
+    "lint:fix": "biome check --write .",
+    "format": "biome format --write ."
+  },
+  "dependencies": {
+    "@nuxtjs/tailwindcss": "^6.14.0",
+    "@pinia/nuxt": "^0.11.3",
+    "nuxt": "^4.4.2",
+    "papaparse": "^5.5.3",
+    "pinia": "^3.0.4",
+    "vue": "^3.5.32"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "^2.4.12",
+    "@types/papaparse": "^5.5.2"
+  }
+}
