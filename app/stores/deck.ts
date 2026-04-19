@@ -87,6 +87,11 @@ function inclusionPct(card: { num_decks?: number; potential_decks?: number }) {
   return card.num_decks / card.potential_decks;
 }
 
+// Sort weight for cards Scryfall has no `edhrec_rank` for. Bigger than any
+// real EDHREC rank (~30k at time of writing) so these land at the end of
+// any "sort by popularity" pass, never at the top.
+const RANK_UNRANKED = 1_000_000;
+
 function classifyType(typeLine: string | undefined): string {
   if (!typeLine) return "Other";
   if (/Land/.test(typeLine)) return "Lands";
@@ -760,7 +765,9 @@ export const useDeckStore = defineStore("deck", {
           if (!isCastable(sc)) continue;
           out.push({ card: c, sc });
         }
-        out.sort((a, b) => (a.sc.edhrec_rank ?? 99999) - (b.sc.edhrec_rank ?? 99999));
+        out.sort(
+          (a, b) => (a.sc.edhrec_rank ?? RANK_UNRANKED) - (b.sc.edhrec_rank ?? RANK_UNRANKED),
+        );
         return out;
       };
       if (nonLandAdded < nonLandBudget) {

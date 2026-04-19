@@ -3,6 +3,7 @@
 // cache (IndexedDB) instead of a disk cache. Scryfall's public API is
 // CORS-enabled (verified) so no proxy is needed.
 
+import { fetchWithRetry, sleep } from "~/utils/http";
 import { readCache, writeCacheMany } from "~/utils/storage";
 import type { ScryfallCard } from "~~/shared/types";
 
@@ -16,31 +17,6 @@ const BATCH_COOLDOWN_MS = 100;
 export interface ScryfallIdentifier {
   id?: string;
   name?: string;
-}
-
-function sleep(ms: number): Promise<void> {
-  return new Promise((r) => setTimeout(r, ms));
-}
-
-// Wraps $fetch so that a 429 with a Retry-After header waits the requested
-// delay and retries once. Everything else bubbles to the caller.
-async function fetchWithRetry<T>(url: string, opts?: Record<string, unknown>): Promise<T> {
-  try {
-    return await $fetch<T>(url, opts);
-  } catch (err) {
-    const status = (err as { response?: { status?: number } })?.response?.status;
-    const retryAfter = (err as { response?: { headers?: Headers } })?.response?.headers?.get?.(
-      "retry-after",
-    );
-    if (status === 429 && retryAfter) {
-      const wait = Number.parseInt(retryAfter, 10);
-      if (Number.isFinite(wait) && wait >= 0 && wait <= 30) {
-        await sleep(wait * 1000);
-        return await $fetch<T>(url, opts);
-      }
-    }
-    throw err;
-  }
 }
 
 export async function getCardById(id: string): Promise<ScryfallCard | null> {

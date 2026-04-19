@@ -250,36 +250,41 @@ function clearDeck() {
             <button
               class="w-8 h-8 rounded-lg bg-neutral-800 hover:bg-neutral-700 text-neutral-300 inline-flex items-center justify-center transition-colors"
               title="Clear deck (remove all non-commander cards)"
+              aria-label="Clear deck"
               @click="clearDeck"
             >
-              🗑
+              <span aria-hidden="true">🗑</span>
             </button>
             <button
               :disabled="saving"
               class="w-8 h-8 rounded-lg bg-neutral-800 hover:bg-neutral-700 disabled:opacity-50 inline-flex items-center justify-center transition-colors"
               title="Save session"
+              :aria-label="saving ? 'Saving session' : 'Save session'"
               @click="save"
             >
-              <span v-if="saving" class="text-xs">…</span>
-              <span v-else>💾</span>
+              <span v-if="saving" class="text-xs" aria-hidden="true">…</span>
+              <span v-else aria-hidden="true">💾</span>
             </button>
             <button
               class="w-8 h-8 rounded-lg bg-neutral-800 hover:bg-neutral-700 inline-flex items-center justify-center transition-colors relative"
               :title="copiedAt ? `Copied at ${copiedAt}` : 'Copy decklist to clipboard'"
+              aria-label="Copy decklist to clipboard"
               @click="copyDeck"
             >
-              📋
+              <span aria-hidden="true">📋</span>
               <span
                 v-if="copiedAt"
                 class="absolute -top-1 -right-1 w-3 h-3 rounded-full bg-emerald-500 ring-2 ring-neutral-900"
+                aria-hidden="true"
               />
             </button>
             <button
               class="w-8 h-8 rounded-lg bg-neutral-800 hover:bg-neutral-700 inline-flex items-center justify-center transition-colors"
               title="Export decklist"
+              aria-label="Export decklist"
               @click="doExport"
             >
-              ⇪
+              <span aria-hidden="true">⇪</span>
             </button>
           </div>
         </div>
@@ -288,8 +293,12 @@ function clearDeck() {
       <!-- Stats panel with integrated progress ring (takes remaining width) -->
       <div class="flex-1 min-w-0 md:border-l border-t md:border-t-0 border-neutral-800 pt-4 md:pt-0 md:pl-5 flex flex-col sm:flex-row gap-4 sm:gap-5 items-start">
         <!-- Progress ring -->
-        <div class="relative w-24 h-24 shrink-0 flex items-center justify-center mx-auto sm:mx-0">
-          <svg viewBox="0 0 80 80" class="w-24 h-24 -rotate-90">
+        <div
+          class="relative w-24 h-24 shrink-0 flex items-center justify-center mx-auto sm:mx-0"
+          role="img"
+          :aria-label="`Deck progress: ${deck.deckSize} of 100 cards`"
+        >
+          <svg viewBox="0 0 80 80" class="w-24 h-24 -rotate-90" aria-hidden="true">
             <circle cx="40" cy="40" r="34" fill="none" stroke="rgb(38 38 38)" stroke-width="6" />
             <circle
               cx="40"

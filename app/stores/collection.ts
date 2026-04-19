@@ -84,6 +84,9 @@ export const useCollectionStore = defineStore("collection", {
       text: string,
       _filename = "imported-collection.csv",
     ): Promise<{ imported: number; notFound: string[] }> {
+      if (!text.trim()) {
+        throw new Error("The import is empty. Paste a card list or upload a CSV.");
+      }
       const firstLine = text.split(/\r?\n/, 1)[0] ?? "";
       const isStructuredCsv = /name/i.test(firstLine) && /scryfall\s*id/i.test(firstLine);
 
@@ -140,6 +143,26 @@ export const useCollectionStore = defineStore("collection", {
 
 // --- Helpers ---------------------------------------------------------------
 
+// Build a CollectionEntry with empty-string defaults for the many
+// optional-but-always-present (typed `string`) metadata fields. Used by
+// both the ManaBox CSV path (rich data) and the plain-text path
+// (synthetic copy with most fields blank).
+function makeEntry(
+  partial: Partial<CollectionEntry> & Pick<CollectionEntry, "name" | "scryfallId" | "quantity">,
+): CollectionEntry {
+  return {
+    setCode: "",
+    setName: "",
+    collectorNumber: "",
+    foil: "",
+    rarity: "",
+    condition: "",
+    language: "",
+    binderName: "",
+    ...partial,
+  };
+}
+
 // ManaBox CSV → CollectionCard[] aggregated by Scryfall ID.
 function parseManaBoxCsv(csv: string): { cards: CollectionCard[]; notFound: string[] } {
   const parsed = Papa.parse<Record<string, string>>(csv, {
@@ -154,19 +177,19 @@ function parseManaBoxCsv(csv: string): { cards: CollectionCard[]; notFound: stri
       if (row.Name) notFound.push(row.Name);
       continue;
     }
-    const entry: CollectionEntry = {
+    const entry = makeEntry({
       name: row.Name ?? "",
+      scryfallId,
+      quantity: Number.parseInt(row.Quantity ?? "0", 10) || 0,
       setCode: row["Set code"] ?? "",
       setName: row["Set name"] ?? "",
       collectorNumber: row["Collector number"] ?? "",
       foil: row.Foil ?? "",
       rarity: row.Rarity ?? "",
-      quantity: Number.parseInt(row.Quantity ?? "0", 10) || 0,
-      scryfallId,
       condition: row.Condition ?? "",
       language: row.Language ?? "",
       binderName: row["Binder Name"] ?? "",
-    };
+    });
     const existing = byScryfall.get(scryfallId);
     if (existing) {
       existing.quantity += entry.quantity;
@@ -228,19 +251,15 @@ async function resolveDeckText(
       scryfallId: sc.id,
       quantity,
       copies: [
-        {
+        makeEntry({
           name: sc.name,
           scryfallId: sc.id,
+          quantity,
           setCode: sc.set ?? "",
           setName: sc.set_name ?? "",
           collectorNumber: sc.collector_number ?? "",
-          foil: "",
           rarity: sc.rarity ?? "",
-          quantity,
-          condition: "",
-          language: "",
-          binderName: "",
-        },
+        }),
       ],
     });
   }
