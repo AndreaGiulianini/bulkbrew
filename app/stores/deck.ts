@@ -5,6 +5,7 @@ import { commanderFaceName, edhrecSlug } from "~/utils/slug";
 import type {
   CategorizedRecs,
   DeckCard,
+  DeckCardSource,
   DeckRoles,
   DeckSession,
   DeckStats,
@@ -119,6 +120,17 @@ export const useDeckStore = defineStore("deck", {
   getters: {
     deckSize(s): number {
       return (s.session?.cards ?? []).reduce((n, c) => n + (c.quantity ?? 1), 0);
+    },
+    // How the current deck breaks down by source. Lets the UI show
+    // "X EDHREC picks / Y filler" alongside the raw deck size.
+    sourceBreakdown(s): { edhrec: number; filler: number; manual: number; commander: number } {
+      const out = { edhrec: 0, filler: 0, manual: 0, commander: 0 };
+      for (const c of s.session?.cards ?? []) {
+        const qty = c.quantity ?? 1;
+        const src = c.source ?? "manual";
+        if (src in out) out[src as keyof typeof out] += qty;
+      }
+      return out;
     },
     deckNames(s): Set<string> {
       return new Set((s.session?.cards ?? []).map((c) => c.name.toLowerCase()));
@@ -303,6 +315,7 @@ export const useDeckStore = defineStore("deck", {
             scryfallId: commander.scryfallId,
             category: "commander",
             fromCollection: true,
+            source: "commander",
           },
         ],
         createdAt: now,
@@ -314,6 +327,38 @@ export const useDeckStore = defineStore("deck", {
     loadSession(session: DeckSession) {
       this.session = { ...session };
       this.edhrec = null;
+    },
+
+    // Sessions saved before `resolveNames` patched collection cards in
+    // place stored deck cards with `scryfallId=""`. Those tiles fall back
+    // to `/cards/named?format=image`, which shares the `/cards/collection`
+    // rate-limit bucket — 100 tiles can crawl.
+    //
+    // Running here on /build mount: resolve only the names that are
+    // missing an ID (via the collection store, which dedupes against
+    // scryfallByName automatically), patch the in-memory session, and
+    // persist the fix so the next open is instant. Silent and one-time
+    // per saved deck.
+    async patchMissingScryfallIds(): Promise<void> {
+      if (!this.session) return;
+      const missing = this.session.cards.filter((c) => !c.scryfallId).map((c) => c.name);
+      if (!missing.length) return;
+      const collection = useCollectionStore();
+      try {
+        await collection.resolveNames(missing);
+      } catch {
+        return; // rate-limited / offline — tiles keep their fallback
+      }
+      let mutated = false;
+      for (const card of this.session.cards) {
+        if (card.scryfallId) continue;
+        const sc = collection.scryfallByName.get(card.name.toLowerCase());
+        if (sc?.id) {
+          card.scryfallId = sc.id;
+          mutated = true;
+        }
+      }
+      if (mutated) await this.save();
     },
 
     async fetchRecs() {
@@ -352,17 +397,20 @@ export const useDeckStore = defineStore("deck", {
 
     // Returns true if the card was added, false if it was already in the deck
     // (singleton-by-name, which matches EDH rules for non-basics and keeps the
-    // autofill dedup cheap).
+    // autofill dedup cheap). Callers pass `source` so the UI can tell EDHREC
+    // picks apart from `filler` picks. UI-triggered adds (recs panel, manual
+    // search) default to "manual".
     addCard(card: {
       name: string;
       category: string;
       scryfallId?: string;
       fromCollection: boolean;
       inclusion?: number;
+      source?: DeckCardSource;
     }): boolean {
       if (!this.session) return false;
       if (this.deckNames.has(card.name.toLowerCase())) return false;
-      this.session.cards.push({ ...card, quantity: 1 });
+      this.session.cards.push({ ...card, quantity: 1, source: card.source ?? "manual" });
       this.session.updatedAt = new Date().toISOString();
       return true;
     },
@@ -579,6 +627,7 @@ export const useDeckStore = defineStore("deck", {
             scryfallId: ownedCard?.scryfallId,
             fromCollection: true,
             inclusion: inclusionPct(c),
+            source: "edhrec",
           });
           if (!added) continue;
           localDeckNames.add(c.name.toLowerCase());
@@ -645,6 +694,7 @@ export const useDeckStore = defineStore("deck", {
             scryfallId: ownedCard?.scryfallId,
             fromCollection: true,
             inclusion: inclusionPct(c),
+            source: "edhrec",
           });
           if (!added) continue;
           localDeckNames.add(c.name.toLowerCase());
@@ -696,6 +746,7 @@ export const useDeckStore = defineStore("deck", {
             scryfallId: ownedCard?.scryfallId,
             fromCollection: true,
             inclusion: inclusionPct(c),
+            source: "edhrec",
           });
           if (!added) continue;
           localDeckNames.add(c.name.toLowerCase());
@@ -740,6 +791,7 @@ export const useDeckStore = defineStore("deck", {
             scryfallId: ownedCard?.scryfallId,
             fromCollection: true,
             inclusion: inclusionPct(cv),
+            source: "edhrec",
           });
           if (!added) continue;
           localDeckNames.add(key);
@@ -783,6 +835,7 @@ export const useDeckStore = defineStore("deck", {
             category: classifyType(sc.type_line).toLowerCase(),
             scryfallId: card.scryfallId,
             fromCollection: true,
+            source: "filler",
           });
           if (!added) continue;
           localDeckNames.add(card.name.toLowerCase());
@@ -805,6 +858,7 @@ export const useDeckStore = defineStore("deck", {
             category: classifyType(sc.type_line).toLowerCase(),
             scryfallId: card.scryfallId,
             fromCollection: true,
+            source: "filler",
           });
           if (!added) continue;
           localDeckNames.add(card.name.toLowerCase());
@@ -845,11 +899,18 @@ export const useDeckStore = defineStore("deck", {
             .sort((a, b) => score(b) - score(a));
           for (const c of candidates) {
             if (currentLands >= LAND_TARGET) break;
+            // Carry Scryfall's ID through from the EDHREC cardview (it's
+            // the same card, just unowned) so the "missing to buy" tile
+            // renders via the CDN URL rather than the `/cards/named`
+            // fallback.
+            const scId = c.id ?? collection.getScryfall(c.name)?.id;
             const added = this.addCard({
               name: c.name,
               category: list.tag,
+              scryfallId: scId,
               fromCollection: false,
               inclusion: inclusionPct(c),
+              source: "edhrec",
             });
             if (!added) continue;
             localDeckNames.add(c.name.toLowerCase());
@@ -915,6 +976,7 @@ export const useDeckStore = defineStore("deck", {
             category: "lands",
             fromCollection: fullyOwned,
             quantity: wanted,
+            source: "filler",
           });
         }
         needed -= wanted;
@@ -954,6 +1016,7 @@ export const useDeckStore = defineStore("deck", {
             category: "lands",
             fromCollection: true,
             quantity: wanted,
+            source: "filler",
           });
         }
         needed -= wanted;

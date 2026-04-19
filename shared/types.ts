@@ -97,6 +97,13 @@ export interface EdhrecPage {
   };
 }
 
+// Where this card came into the deck. `category` tells you the tag the
+// auto-filler used, but doesn't distinguish "this card appeared in the
+// commander's EDHREC recommendations" from "we picked it off your shelf
+// purely by global edhrec_rank". `source` answers that cleanly so the UI
+// can show which cards are on-theme vs just filler.
+export type DeckCardSource = "commander" | "edhrec" | "filler" | "manual";
+
 export interface DeckCard {
   name: string;
   scryfallId?: string;
@@ -104,6 +111,7 @@ export interface DeckCard {
   fromCollection: boolean;
   inclusion?: number;
   quantity?: number;
+  source?: DeckCardSource;
 }
 
 export interface DeckRoles {

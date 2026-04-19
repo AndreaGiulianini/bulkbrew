@@ -5,11 +5,16 @@ const props = defineProps<{
   show: boolean;
   commanderName: string;
   commanderScryfallId?: string;
-  stage: "recs" | "build" | "save" | "done";
+  stage: "recs" | "prepare" | "build" | "save" | "done";
+  // Optional "X / Y" overlay for the prepare stage (showing how many cards
+  // of the pre-fill enrichment have resolved against Scryfall).
+  prepareLoaded?: number;
+  prepareTotal?: number;
 }>();
 
 const stages = [
   { key: "recs", label: "Consulting EDHREC" },
+  { key: "prepare", label: "Resolving recommended cards" },
   { key: "build", label: "Assembling deck" },
   { key: "save", label: "Saving session" },
 ] as const;
@@ -53,7 +58,13 @@ const progress = computed(() => {
           <div class="text-xl font-bold text-white">{{ commanderName }}</div>
           <div class="text-sm text-neutral-400 h-5">
             <span>{{ stages[activeIndex]?.label ?? "Finalising" }}</span>
-            <span class="inline-block w-6 text-left">
+            <span
+              v-if="stage === 'prepare' && prepareTotal && prepareLoaded !== undefined"
+              class="ml-1 tabular-nums text-neutral-500"
+            >
+              {{ prepareLoaded.toLocaleString() }} / {{ prepareTotal.toLocaleString() }}
+            </span>
+            <span v-else class="inline-block w-6 text-left">
               <span class="animate-dot-1">.</span>
               <span class="animate-dot-2">.</span>
               <span class="animate-dot-3">.</span>

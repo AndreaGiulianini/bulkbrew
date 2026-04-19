@@ -4,7 +4,7 @@
 // CORS-enabled (verified) so no proxy is needed.
 
 import { fetchWithRetry, sleep } from "~/utils/http";
-import { readCache, writeCacheMany } from "~/utils/storage";
+import { readCache, writeCache, writeCacheMany } from "~/utils/storage";
 import type { ScryfallCard } from "~~/shared/types";
 
 const ONE_WEEK_MS = 7 * 24 * 60 * 60 * 1000;
@@ -94,12 +94,22 @@ export async function getCardByName(
 // Cache-first; only un-cached identifiers hit Scryfall. Writes each result
 // under both `id:` and `name:` keys so future lookups hit regardless of which
 // identifier type they use.
+// Optional progress hook: called after each stage the resolver completes,
+// so callers can drive a determinate progress bar. `loaded` is the count
+// of identifiers that have either hit the cache or come back from a
+// Scryfall batch (successful or not) — it monotonically increases toward
+// `total`. Called at least once with the initial cache sweep so the UI
+// can show a nonzero starting state.
+export type ResolveProgress = (loaded: number, total: number) => void;
+
 export async function resolveIdentifiers(
   identifiers: ScryfallIdentifier[],
+  opts: { onProgress?: ResolveProgress } = {},
 ): Promise<{ data: ScryfallCard[]; notFound: ScryfallIdentifier[] }> {
   const results: ScryfallCard[] = [];
   const notFound: ScryfallIdentifier[] = [];
   const toFetch: ScryfallIdentifier[] = [];
+  const total = identifiers.length;
 
   for (const ident of identifiers) {
     const cached = ident.id
@@ -123,6 +133,11 @@ export async function resolveIdentifiers(
     }
   }
 
+  // Everything not in `toFetch` was either cached or undecodable — either
+  // way, "done" from the progress bar's perspective.
+  let loaded = total - toFetch.length;
+  opts.onProgress?.(loaded, total);
+
   let consecutiveFailures = 0;
   for (let i = 0; i < toFetch.length; i += BATCH_SIZE) {
     const batch = toFetch.slice(i, i + BATCH_SIZE);
@@ -130,6 +145,8 @@ export async function resolveIdentifiers(
       // We're almost certainly being rate-limited; bail on the remaining
       // batches and let the caller report the gap via `notFound`.
       notFound.push(...batch);
+      loaded += batch.length;
+      opts.onProgress?.(loaded, total);
       continue;
     }
     if (i > 0) await sleep(BATCH_COOLDOWN_MS);
@@ -159,9 +176,13 @@ export async function resolveIdentifiers(
       }
       await writeCacheMany(writes);
       if (resp.not_found?.length) notFound.push(...resp.not_found);
+      loaded += batch.length;
+      opts.onProgress?.(loaded, total);
     } catch {
       consecutiveFailures += 1;
       notFound.push(...batch);
+      loaded += batch.length;
+      opts.onProgress?.(loaded, total);
       // A cool-down period longer than the normal batch gap gives the
       // rate-limit window time to slide if we're only briefly throttled.
       await sleep(1000);
@@ -169,4 +190,65 @@ export async function resolveIdentifiers(
   }
 
   return { data: results, notFound };
+}
+
+// Universal "list of cards eligible to be a commander" catalog. Not per-user:
+// it's Scryfall's global answer to `is:commander type:legendary type:creature`.
+// We fetch + cache once (7-day TTL) and intersect locally with each user's
+// collection. Avoids a per-user full-collection enrichment round-trip on
+// the /commander page — the page only needs to know which OF the user's
+// names are commanders, and that's a local Set intersection once the
+// catalog is in memory.
+//
+// At ~4 000 legendary creatures across Magic's history, ~175 per Scryfall
+// page, this is ~23 paginated GETs on a cold cache. The 250 ms cooldown
+// keeps us under Scryfall's unofficial rate limit. Subsequent visits (same
+// user, same device, within 7 days) hit IndexedDB and skip the network
+// entirely.
+const COMMANDER_CATALOG_KEY = "all";
+const CATALOG_COOLDOWN_MS = 250;
+
+interface ScryfallSearchResponse {
+  data: ScryfallCard[];
+  has_more: boolean;
+  next_page?: string;
+}
+
+export async function fetchCommanderCatalog(): Promise<ScryfallCard[]> {
+  const cached = await readCache<ScryfallCard[]>(
+    "scryfall-commanders",
+    COMMANDER_CATALOG_KEY,
+    ONE_WEEK_MS,
+  );
+  if (cached) return cached;
+
+  const all: ScryfallCard[] = [];
+  let url: string | undefined =
+    "https://api.scryfall.com/cards/search?q=is%3Acommander+type%3Alegendary+type%3Acreature&unique=cards&order=edhrec";
+  let pages = 0;
+  while (url) {
+    try {
+      const resp = await fetchWithRetry<ScryfallSearchResponse>(url, {
+        retry: 1,
+        retryDelay: 300,
+      });
+      all.push(...resp.data);
+      url = resp.has_more ? resp.next_page : undefined;
+      pages += 1;
+      // Safety cap: Scryfall's commander pool grows over time; this keeps
+      // us from a runaway loop if their API ever lied about `has_more`.
+      if (pages > 40) break;
+      if (url) await sleep(CATALOG_COOLDOWN_MS);
+    } catch {
+      // Bail out of pagination on any error; return whatever we have.
+      // Caller treats an empty array as "couldn't fetch, no candidates"
+      // which is better than throwing and leaving the page broken.
+      break;
+    }
+  }
+
+  if (all.length) {
+    await writeCache("scryfall-commanders", COMMANDER_CATALOG_KEY, all);
+  }
+  return all;
 }

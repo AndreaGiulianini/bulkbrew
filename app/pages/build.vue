@@ -43,6 +43,11 @@ onMounted(async () => {
   }
   await collection.load();
   if (!deck.edhrec) await deck.fetchRecs();
+  // One-time migration for saved decks from before DeckCards carried
+  // Scryfall IDs. No-op when every tile already has an ID. Runs in the
+  // background so the page is interactive immediately; tiles flip from
+  // the `/cards/named` fallback URL to the direct CDN URL as IDs land.
+  void deck.patchMissingScryfallIds();
 });
 
 const sizeColor = computed(() => {
@@ -139,6 +144,17 @@ async function autoFill() {
   autoFilling.value = true;
   actionError.value = null;
   try {
+    // Just-in-time enrichment. Scoped to the commander's EDHREC rec pool
+    // (bounded at ~1 500 names) rather than the whole owned collection,
+    // so this stays cheap even on a 40 K-card library. Step 4 / 4.5 of
+    // autofill naturally falls through to "owned cards with Scryfall
+    // data", which after this pass equals "owned cards that EDHREC
+    // recommends for this commander" — exactly the filler pool we want.
+    const names = new Set<string>();
+    for (const list of deck.edhrec?.container?.json_dict?.cardlists ?? []) {
+      for (const cv of list.cardviews) names.add(cv.name);
+    }
+    await collection.resolveNames(Array.from(names));
     deck.autoFillFromCollection();
     autoFillStage.value = "save";
     await deck.save();
@@ -245,7 +261,16 @@ function clearDeck() {
               @click="autoFill"
             >
               <span>⚡</span>
-              <span>{{ autoFilling ? "Filling…" : "Auto-fill" }}</span>
+              <span v-if="!autoFilling">Auto-fill</span>
+              <span
+                v-else-if="collection.resolveProgress"
+                class="tabular-nums"
+              >
+                Resolving
+                {{ collection.resolveProgress.loaded.toLocaleString() }} /
+                {{ collection.resolveProgress.total.toLocaleString() }}
+              </span>
+              <span v-else>Filling…</span>
             </button>
             <button
               class="w-8 h-8 rounded-lg bg-neutral-800 hover:bg-neutral-700 text-neutral-300 inline-flex items-center justify-center transition-colors"
@@ -322,8 +347,36 @@ function clearDeck() {
         </div>
 
         <!-- Stats -->
-        <div class="flex-1 min-w-0 w-full">
+        <div class="flex-1 min-w-0 w-full space-y-2">
           <DeckStats :stats="deck.stats" />
+          <!-- Source breakdown: EDHREC picks vs generic filler -->
+          <div
+            v-if="deck.sourceBreakdown.edhrec + deck.sourceBreakdown.filler > 0"
+            class="flex flex-wrap items-center gap-2 text-[11px]"
+            aria-label="Deck composition by source"
+          >
+            <span
+              class="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full bg-emerald-950/60 text-emerald-300 ring-1 ring-emerald-700/50"
+              title="Cards the auto-filler pulled from this commander's EDHREC recommendations"
+            >
+              <span aria-hidden="true">★</span>
+              <span class="tabular-nums">{{ deck.sourceBreakdown.edhrec }} EDHREC</span>
+            </span>
+            <span
+              class="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full bg-amber-950/60 text-amber-300 ring-1 ring-amber-700/50"
+              title="Cards added from your collection by global popularity (not on-theme recommendations)"
+            >
+              <span aria-hidden="true">·</span>
+              <span class="tabular-nums">{{ deck.sourceBreakdown.filler }} filler</span>
+            </span>
+            <span
+              v-if="deck.sourceBreakdown.manual > 0"
+              class="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full bg-neutral-800 text-neutral-300 ring-1 ring-neutral-700"
+              title="Cards you added manually"
+            >
+              <span class="tabular-nums">{{ deck.sourceBreakdown.manual }} manual</span>
+            </span>
+          </div>
         </div>
       </div>
     </div>
@@ -515,6 +568,41 @@ function clearDeck() {
           Recommendations
         </button>.
       </div>
+      <!-- Legend: explains the border colors + corner badges on each deck tile -->
+      <div
+        v-else
+        class="bg-neutral-900 border border-neutral-800 rounded p-3 text-xs space-y-1.5"
+      >
+        <div class="text-neutral-500 uppercase tracking-wider text-[10px]">Legend</div>
+        <div class="flex flex-wrap gap-x-4 gap-y-2 text-neutral-300 items-center">
+          <span class="flex items-center gap-1.5">
+            <span class="w-3 h-3 rounded border-2 border-emerald-700/60 inline-block" />
+            Owned
+          </span>
+          <span class="flex items-center gap-1.5">
+            <span class="w-3 h-3 rounded border-2 border-rose-700/60 inline-block" />
+            Missing (to buy)
+          </span>
+          <span class="flex items-center gap-1.5">
+            <span
+              class="w-4 h-4 rounded-full bg-emerald-600/90 text-white text-[10px] font-bold inline-flex items-center justify-center"
+            >★</span>
+            EDHREC pick
+          </span>
+          <span class="flex items-center gap-1.5">
+            <span
+              class="w-4 h-4 rounded-full bg-amber-600/80 text-white text-[11px] font-bold inline-flex items-center justify-center leading-none"
+            >·</span>
+            Filler
+          </span>
+          <span class="flex items-center gap-1.5">
+            <span class="bg-black/80 text-amber-300 text-[10px] font-bold px-1.5 py-0.5 rounded tabular-nums">
+              ×2
+            </span>
+            Quantity
+          </span>
+        </div>
+      </div>
       <div
         v-for="grp in deck.deckByType"
         :key="grp.group"
@@ -535,6 +623,7 @@ function clearDeck() {
             :scryfall-id="c.scryfallId"
             :from-collection="c.fromCollection"
             :quantity="c.quantity"
+            :source="c.source"
             :removable="grp.group !== 'Commander'"
             @remove="removeCard(c.name)"
           />

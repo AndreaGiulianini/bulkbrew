@@ -151,7 +151,7 @@ export async function writeCacheMany<T>(
 const HARD_EXPIRY_MS = 30 * 24 * 60 * 60 * 1000;
 const SWEEP_INTERVAL_MS = 60 * 60 * 1000;
 const SWEEP_MARKER = "bulkbrew.cache.lastSweep";
-const SWEEP_PREFIXES = ["edhrec:", "scryfall-card:", "scryfall-name:"];
+const SWEEP_PREFIXES = ["edhrec:", "scryfall-card:", "scryfall-name:", "scryfall-commanders:"];
 const SWEEP_BUDGET = 500;
 
 async function maybeSweep(): Promise<void> {
