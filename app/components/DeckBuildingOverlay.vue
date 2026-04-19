@@ -37,7 +37,12 @@ const progress = computed(() => {
           <div class="absolute inset-[-18px] rounded-2xl border-4 border-emerald-500/30 border-t-emerald-400 animate-spin-slow" />
           <div class="absolute inset-[-2px] rounded-lg ring-2 ring-emerald-400/60 shadow-[0_0_40px_rgba(112,162,136,0.5)]" />
           <div class="relative w-60 rounded-lg overflow-hidden animate-pulse-soft">
-            <CardImage :name="commanderName" :scryfall-id="commanderScryfallId" size="normal" />
+            <CardImage
+              :name="commanderName"
+              :scryfall-id="commanderScryfallId"
+              size="normal"
+              eager
+            />
           </div>
         </div>
 

@@ -1,0 +1,17 @@
+{
+  "name": "BulkBrew",
+  "short_name": "BulkBrew",
+  "description": "Turn your bulk into Commander decks from your collection.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#272727",
+  "theme_color": "#70A288",
+  "icons": [
+    {
+      "src": "/favicon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    }
+  ]
+}

@@ -1,7 +1,7 @@
 import { defineStore } from "pinia";
 import { type CardRole, detectRoles } from "~/utils/card-roles";
 import { getCommanderPage } from "~/utils/edhrec";
-import { edhrecSlug } from "~/utils/slug";
+import { commanderFaceName, edhrecSlug } from "~/utils/slug";
 import type {
   CategorizedRecs,
   DeckCard,
@@ -54,6 +54,7 @@ interface State {
   session: DeckSession | null;
   edhrec: EdhrecPage | null;
   loadingRecs: boolean;
+  autoFilling: boolean;
   error: string | null;
   showMissing: boolean;
   rules: BuildRules;
@@ -104,6 +105,7 @@ export const useDeckStore = defineStore("deck", {
     session: null,
     edhrec: null,
     loadingRecs: false,
+    autoFilling: false,
     error: null,
     showMissing: true,
     rules: { ...DEFAULT_RULES },
@@ -255,7 +257,7 @@ export const useDeckStore = defineStore("deck", {
         const missing: EnrichedRec[] = [];
         for (const cv of list.cardviews) {
           const sc = collection.getScryfall(cv.name);
-          if (sc?.color_identity && !sc.color_identity.every((c) => colorId.has(c))) continue;
+          if (sc && !(sc.color_identity ?? []).every((c) => colorId.has(c))) continue;
           const ownedCard = collection.getOwned(cv.name);
           const enriched: EnrichedRec = {
             ...cv,
@@ -311,10 +313,13 @@ export const useDeckStore = defineStore("deck", {
 
     async fetchRecs() {
       if (!this.session) return;
+      if (this.loadingRecs) return;
       this.loadingRecs = true;
       this.error = null;
       try {
-        const s = edhrecSlug(this.session.commanderName);
+        const collection = useCollectionStore();
+        const sc = collection.getScryfall(this.session.commanderName);
+        const s = edhrecSlug(sc ? commanderFaceName(sc) : this.session.commanderName);
         const data = await getCommanderPage(s);
         if (!data) {
           throw new Error(`EDHREC has no page for "${this.session.commanderName}".`);
@@ -328,7 +333,6 @@ export const useDeckStore = defineStore("deck", {
         for (const list of data.container?.json_dict?.cardlists ?? []) {
           for (const cv of list.cardviews) names.add(cv.name);
         }
-        const collection = useCollectionStore();
         await collection.enrichNames(Array.from(names));
       } catch (err) {
         this.error = err instanceof Error ? err.message : String(err);
@@ -372,6 +376,17 @@ export const useDeckStore = defineStore("deck", {
 
     autoFillFromCollection() {
       if (!this.session || !this.edhrec) return;
+      if (this.autoFilling) return;
+      this.autoFilling = true;
+      try {
+        this._autoFillImpl();
+      } finally {
+        this.autoFilling = false;
+      }
+    },
+
+    _autoFillImpl() {
+      if (!this.session || !this.edhrec) return;
       const collection = useCollectionStore();
       const colorId = new Set(this.session.colorIdentity);
       const DECK_TOTAL = 100;
@@ -379,6 +394,17 @@ export const useDeckStore = defineStore("deck", {
       const edhrec = this.edhrec;
       const lists = edhrec.container?.json_dict?.cardlists ?? [];
       const landCategories = new Set(["lands", "utilitylands"]);
+
+      // Local mirrors of session.cards state so hot paths don't hit the
+      // expensive `stats` / `deckNames` / `deckSize` getters (each walks
+      // every deck card). We maintain them alongside each `addCard` call.
+      const localDeckNames = new Set<string>(this.session.cards.map((c) => c.name.toLowerCase()));
+      let localSize = this.session.cards.reduce((n, c) => n + (c.quantity ?? 1), 0);
+      let landsAdded = 0;
+      for (const c of this.session.cards) {
+        const sc = collection.getScryfall(c.name);
+        if (sc?.type_line && /Land/.test(sc.type_line)) landsAdded += c.quantity ?? 1;
+      }
 
       const rules = this.rules;
       // User-overridable land target. Falls through to EDHREC-derived default set
@@ -416,10 +442,21 @@ export const useDeckStore = defineStore("deck", {
         recursion: 0,
         tutor: 0,
       };
+      // Memoize role detection per card name. The deficit pass (Step 3.5)
+      // and the score tiebreaker both hit the same cards repeatedly —
+      // running the oracle-text regex fresh every time is wasted work on
+      // a 200-card recommendation pool.
+      const rolesByName = new Map<string, Set<CardRole>>();
       const rolesOf = (name: string): Set<CardRole> => {
+        const key = name.toLowerCase();
+        const cached = rolesByName.get(key);
+        if (cached) return cached;
         const sc = collection.getScryfall(name);
-        if (!sc?.oracle_text) return new Set();
-        return detectRoles(sc.oracle_text, sc.type_line);
+        const roles = sc?.oracle_text
+          ? detectRoles(sc.oracle_text, sc.type_line)
+          : new Set<CardRole>();
+        rolesByName.set(key, roles);
+        return roles;
       };
       const bumpRoles = (name: string) => {
         for (const r of rolesOf(name)) roleCounts[r] += 1;
@@ -451,15 +488,12 @@ export const useDeckStore = defineStore("deck", {
         const syn = Math.max(0, Math.min(1, c.synergy ?? 0));
         let base = incl + synWeight * syn;
         if (c.name) {
-          const sc = collection.getScryfall(c.name);
-          if (sc?.oracle_text) {
-            const roles = detectRoles(sc.oracle_text, sc.type_line);
-            for (const r of roles) {
-              if (isDeficitRole(r) && roleCounts[r] < rules.roleTargets[r]) {
-                base += 0.1;
-              }
+          for (const r of rolesOf(c.name)) {
+            if (isDeficitRole(r) && roleCounts[r] < rules.roleTargets[r]) {
+              base += 0.1;
             }
           }
+          const sc = collection.getScryfall(c.name);
           if (sc?.cmc !== undefined) {
             const bucket = Math.min(7, Math.max(0, Math.floor(sc.cmc)));
             const deficit = (curveTarget[bucket] ?? 0) - (curveCounts[bucket] ?? 0);
@@ -523,20 +557,24 @@ export const useDeckStore = defineStore("deck", {
         if (!landCategories.has(list.tag)) continue;
         const candidates = list.cardviews
           .filter((c) => {
-            if (this.deckNames.has(c.name.toLowerCase())) return false;
+            if (localDeckNames.has(c.name.toLowerCase())) return false;
             return collection.isOwned(c.name);
           })
           .sort((a, b) => score(b) - score(a));
         for (const c of candidates) {
-          if (this.stats.lands >= LAND_TARGET) break;
+          if (landsAdded >= LAND_TARGET) break;
           const ownedCard = collection.getOwned(c.name);
-          this.addCard({
+          const added = this.addCard({
             name: c.name,
             category: list.tag,
             scryfallId: ownedCard?.scryfallId,
             fromCollection: true,
             inclusion: inclusionPct(c),
           });
+          if (!added) continue;
+          localDeckNames.add(c.name.toLowerCase());
+          localSize += 1;
+          landsAdded += 1;
         }
       }
 
@@ -544,8 +582,8 @@ export const useDeckStore = defineStore("deck", {
       // be filled later by unowned EDHREC lands and basics (marked as missing). Without
       // this reservation, a small basic-land collection causes the non-land budget to
       // balloon and crowd out the lands we still need to add.
-      const landsToReserve = Math.max(0, LAND_TARGET - this.stats.lands);
-      const nonLandBudget = DECK_TOTAL - this.deckSize - landsToReserve;
+      const landsToReserve = Math.max(0, LAND_TARGET - landsAdded);
+      const nonLandBudget = DECK_TOTAL - localSize - landsToReserve;
 
       // A card is castable in this deck if every color in its identity is in the
       // commander's identity AND it doesn't require colorless {C} pips (which most
@@ -581,7 +619,7 @@ export const useDeckStore = defineStore("deck", {
         if (target === 0) continue;
         const candidates = list.cardviews
           .filter((c) => {
-            if (this.deckNames.has(c.name.toLowerCase())) return false;
+            if (localDeckNames.has(c.name.toLowerCase())) return false;
             if (!isEdhrecCastable(c)) return false;
             return collection.isOwned(c.name);
           })
@@ -592,13 +630,16 @@ export const useDeckStore = defineStore("deck", {
           if (addedThisCat >= target) break;
           if (nonLandAdded >= nonLandBudget) break;
           const ownedCard = collection.getOwned(c.name);
-          this.addCard({
+          const added = this.addCard({
             name: c.name,
             category: list.tag,
             scryfallId: ownedCard?.scryfallId,
             fromCollection: true,
             inclusion: inclusionPct(c),
           });
+          if (!added) continue;
+          localDeckNames.add(c.name.toLowerCase());
+          localSize += 1;
           bumpTypeCount(c.name);
           bumpRoles(c.name);
           bumpCurve(c.name);
@@ -626,7 +667,7 @@ export const useDeckStore = defineStore("deck", {
           for (const c of list.cardviews) {
             const key = c.name.toLowerCase();
             if (seen.has(key)) continue;
-            if (this.deckNames.has(key)) continue;
+            if (localDeckNames.has(key)) continue;
             if (!isEdhrecCastable(c)) continue;
             if (!collection.isOwned(c.name)) continue;
             if (wouldExceedTypeCap(c.name)) continue;
@@ -640,13 +681,16 @@ export const useDeckStore = defineStore("deck", {
         for (const c of candidates) {
           if (deficit <= 0 || nonLandAdded >= nonLandBudget) break;
           const ownedCard = collection.getOwned(c.name);
-          this.addCard({
+          const added = this.addCard({
             name: c.name,
             category: `role:${role}`,
             scryfallId: ownedCard?.scryfallId,
             fromCollection: true,
             inclusion: inclusionPct(c),
           });
+          if (!added) continue;
+          localDeckNames.add(c.name.toLowerCase());
+          localSize += 1;
           bumpTypeCount(c.name);
           bumpRoles(c.name);
           bumpCurve(c.name);
@@ -665,7 +709,7 @@ export const useDeckStore = defineStore("deck", {
         for (const list of lists) {
           if (landCategories.has(list.tag)) continue;
           for (const c of list.cardviews) {
-            if (this.deckNames.has(c.name.toLowerCase())) continue;
+            if (localDeckNames.has(c.name.toLowerCase())) continue;
             if (!isEdhrecCastable(c)) continue;
             if (!collection.isOwned(c.name)) continue;
             spill.push({ cv: c, tag: list.tag });
@@ -678,16 +722,19 @@ export const useDeckStore = defineStore("deck", {
           if (seen.has(key)) continue;
           seen.add(key);
           if (nonLandAdded >= nonLandBudget) break;
-          if (this.deckNames.has(key)) continue;
+          if (localDeckNames.has(key)) continue;
           if (wouldExceedTypeCap(cv.name)) continue;
           const ownedCard = collection.getOwned(cv.name);
-          this.addCard({
+          const added = this.addCard({
             name: cv.name,
             category: tag,
             scryfallId: ownedCard?.scryfallId,
             fromCollection: true,
             inclusion: inclusionPct(cv),
           });
+          if (!added) continue;
+          localDeckNames.add(key);
+          localSize += 1;
           bumpTypeCount(cv.name);
           bumpRoles(cv.name);
           bumpCurve(cv.name);
@@ -700,26 +747,57 @@ export const useDeckStore = defineStore("deck", {
       // apply here too — without them, Step 4 sorts by global edhrec_rank which
       // puts Sol Ring / Arcane Signet / other mana rocks at the top and would
       // flood the deck with artifacts regardless of the commander's archetype.
-      if (nonLandAdded < nonLandBudget) {
-        const remaining: Array<{ card: (typeof collection.cards)[number]; sc: ScryfallCard }> = [];
+      const remainingNonLand = (): Array<{
+        card: (typeof collection.cards)[number];
+        sc: ScryfallCard;
+      }> => {
+        const out = [];
         for (const c of collection.cards) {
-          if (this.deckNames.has(c.name.toLowerCase())) continue;
+          if (localDeckNames.has(c.name.toLowerCase())) continue;
           const sc = collection.getScryfall(c.name);
           if (!sc) continue;
           if (/Land/.test(sc.type_line)) continue;
           if (!isCastable(sc)) continue;
-          remaining.push({ card: c, sc });
+          out.push({ card: c, sc });
         }
-        remaining.sort((a, b) => (a.sc.edhrec_rank ?? 99999) - (b.sc.edhrec_rank ?? 99999));
-        for (const { card, sc } of remaining) {
+        out.sort((a, b) => (a.sc.edhrec_rank ?? 99999) - (b.sc.edhrec_rank ?? 99999));
+        return out;
+      };
+      if (nonLandAdded < nonLandBudget) {
+        for (const { card, sc } of remainingNonLand()) {
           if (nonLandAdded >= nonLandBudget) break;
           if (wouldExceedTypeCap(card.name)) continue;
-          this.addCard({
+          const added = this.addCard({
             name: card.name,
             category: classifyType(sc.type_line).toLowerCase(),
             scryfallId: card.scryfallId,
             fromCollection: true,
           });
+          if (!added) continue;
+          localDeckNames.add(card.name.toLowerCase());
+          localSize += 1;
+          bumpTypeCount(card.name);
+          bumpRoles(card.name);
+          bumpCurve(card.name);
+          nonLandAdded++;
+        }
+      }
+
+      // Step 4.5: If the per-type caps summed to less than the non-land budget
+      // (common when EDHREC's averages for this commander are tight), fall
+      // through without the cap so the deck still hits 99 non-commander slots.
+      if (nonLandAdded < nonLandBudget) {
+        for (const { card, sc } of remainingNonLand()) {
+          if (nonLandAdded >= nonLandBudget) break;
+          const added = this.addCard({
+            name: card.name,
+            category: classifyType(sc.type_line).toLowerCase(),
+            scryfallId: card.scryfallId,
+            fromCollection: true,
+          });
+          if (!added) continue;
+          localDeckNames.add(card.name.toLowerCase());
+          localSize += 1;
           bumpTypeCount(card.name);
           bumpRoles(card.name);
           bumpCurve(card.name);
@@ -731,26 +809,40 @@ export const useDeckStore = defineStore("deck", {
       this.padOwnedBasicLands(LAND_TARGET);
 
       if (rules.fillMissing) {
-        // Step 6: If still short on lands, fall back to unowned EDHREC non-basic lands
-        // (marked as missing) so the deck remains playable.
+        // Step 6: If still short on lands, fall back to unowned EDHREC non-basic
+        // lands (marked as missing). `padOwnedBasicLands` above may have stacked
+        // basics into a single entry with quantity > 1, so we resync from truth
+        // once here (cheap, <100 cards) and then track incrementally.
+        let currentLands = this.session.cards.reduce((n, c) => {
+          const sc = collection.getScryfall(c.name);
+          const isLand =
+            (sc?.type_line && /Land/.test(sc.type_line)) ||
+            c.category === "lands" ||
+            c.category === "utilitylands";
+          return isLand ? n + (c.quantity ?? 1) : n;
+        }, 0);
+
         for (const list of lists) {
           if (!landCategories.has(list.tag)) continue;
-          if (this.stats.lands >= LAND_TARGET) break;
+          if (currentLands >= LAND_TARGET) break;
           const candidates = list.cardviews
             .filter((c) => {
-              if (this.deckNames.has(c.name.toLowerCase())) return false;
+              if (localDeckNames.has(c.name.toLowerCase())) return false;
               if (!isEdhrecCastable(c)) return false;
               return !collection.isOwned(c.name);
             })
             .sort((a, b) => score(b) - score(a));
           for (const c of candidates) {
-            if (this.stats.lands >= LAND_TARGET) break;
-            this.addCard({
+            if (currentLands >= LAND_TARGET) break;
+            const added = this.addCard({
               name: c.name,
               category: list.tag,
               fromCollection: false,
               inclusion: inclusionPct(c),
             });
+            if (!added) continue;
+            localDeckNames.add(c.name.toLowerCase());
+            currentLands += 1;
           }
         }
 

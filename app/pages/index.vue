@@ -246,17 +246,20 @@ async function importCollection() {
         </div>
       </header>
       <NuxtLink
+        v-if="collection.count"
         to="/commander"
-        :aria-disabled="!collection.count"
-        :class="[
-          'inline-flex items-center px-4 py-2 rounded font-medium text-white',
-          collection.count
-            ? 'bg-emerald-600 hover:bg-emerald-500'
-            : 'bg-neutral-800 pointer-events-none opacity-60',
-        ]"
+        class="inline-flex items-center px-4 py-2 rounded font-medium text-white bg-emerald-600 hover:bg-emerald-500"
       >
         + New deck from commander →
       </NuxtLink>
+      <span
+        v-else
+        aria-disabled="true"
+        class="inline-flex items-center px-4 py-2 rounded font-medium text-neutral-400 bg-neutral-800 cursor-not-allowed select-none"
+        title="Import your collection first"
+      >
+        + New deck from commander →
+      </span>
     </section>
 
     <!-- Saved sessions -->

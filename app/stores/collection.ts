@@ -185,8 +185,12 @@ function parseManaBoxCsv(csv: string): { cards: CollectionCard[]; notFound: stri
 }
 
 // Plain deck-list-style text (Moxfield, MTGO, Arena, handwritten) → resolve
-// each name against Scryfall so we get a stable Scryfall ID to store. Duplicate
-// names are merged by summing quantities.
+// each name against Scryfall so we get a stable Scryfall ID to store.
+//
+// Known limitation: duplicate names are merged by summing quantities; per-
+// copy metadata the ManaBox CSV preserves (foil, condition, language,
+// binder) is not recoverable from a plain deck list, so the merged entry
+// gets a single synthetic copy with empty strings for those fields.
 async function resolveDeckText(
   text: string,
 ): Promise<{ cards: CollectionCard[]; notFound: string[] }> {

@@ -199,6 +199,7 @@ function clearDeck() {
               :scryfall-id="deck.session.commanderScryfallId"
               size="normal"
               hover-preview
+              eager
             />
           </div>
         </div>

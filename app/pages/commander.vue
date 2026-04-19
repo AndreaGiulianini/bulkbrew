@@ -3,7 +3,7 @@ import { computed, onMounted, ref } from "vue";
 import { useCollectionStore } from "~/stores/collection";
 import { useDeckStore } from "~/stores/deck";
 import { resolveCommanderRanks } from "~/utils/edhrec";
-import { edhrecSlug } from "~/utils/slug";
+import { commanderFaceName, edhrecSlug } from "~/utils/slug";
 
 const collection = useCollectionStore();
 const deck = useDeckStore();
@@ -14,11 +14,13 @@ const pickingName = ref("");
 const pickingScryfallId = ref<string | undefined>(undefined);
 const pickStage = ref<"recs" | "build" | "save" | "done">("recs");
 
-// Live EDHREC commander ranks, keyed by slug. We await this before rendering
-// the grid so the user never sees Scryfall's stale placeholder ranks flicker
-// into the live EDHREC numbers. If the call fails (offline, EDHREC down), we
-// flip `ranksReady` anyway and fall through to Scryfall's rank via `rankFor`.
-const liveRanks = ref<Record<string, number | null>>({});
+// Live EDHREC commander ranks, keyed by Scryfall ID. We await this before
+// rendering the grid so the user never sees a placeholder rank flicker into
+// the live EDHREC number. Keying by ID (not slug) disambiguates DFC/split
+// cards whose full name maps to a combined-face slug EDHREC doesn't host;
+// we resolve the commander-legal face via `commanderFaceName` when building
+// the fetch batch and remember which slug belongs to which card.
+const liveRankById = ref<Record<string, number | null>>({});
 const ranksReady = ref(false);
 
 onMounted(async () => {
@@ -27,33 +29,40 @@ onMounted(async () => {
 });
 
 async function loadLiveRanks() {
-  const slugs = Array.from(
-    new Set(collection.legendaryCreatures.map((c) => edhrecSlug(c.name))),
-  ).filter(Boolean);
-  if (!slugs.length) {
+  const slugByScryfallId = new Map<string, string>();
+  const uniqueSlugs = new Set<string>();
+  for (const c of collection.legendaryCreatures) {
+    const slug = edhrecSlug(commanderFaceName(c.scryfall));
+    if (!slug || !c.scryfallId) continue;
+    slugByScryfallId.set(c.scryfallId, slug);
+    uniqueSlugs.add(slug);
+  }
+  if (!uniqueSlugs.size) {
     ranksReady.value = true;
     return;
   }
   try {
-    liveRanks.value = await resolveCommanderRanks(slugs);
+    const ranksBySlug = await resolveCommanderRanks(Array.from(uniqueSlugs));
+    const byId: Record<string, number | null> = {};
+    for (const [id, slug] of slugByScryfallId) byId[id] = ranksBySlug[slug] ?? null;
+    liveRankById.value = byId;
   } catch {
-    // Silent — we fall back to Scryfall's rank per-card.
+    // Silent — commanders without a live rank render without a rank badge.
   } finally {
     ranksReady.value = true;
   }
 }
 
-function rankFor(name: string, scryfallRank: number | undefined): number | null {
-  const live = liveRanks.value[edhrecSlug(name)];
-  if (typeof live === "number") return live;
-  return scryfallRank ?? null;
+function rankFor(scryfallId: string | undefined): number | null {
+  if (!scryfallId) return null;
+  return liveRankById.value[scryfallId] ?? null;
 }
 
 const filtered = computed(() => {
   const q = search.value.trim().toLowerCase();
   const all = [...collection.legendaryCreatures].sort((a, b) => {
-    const ra = rankFor(a.name, a.scryfall?.edhrec_rank) ?? Number.POSITIVE_INFINITY;
-    const rb = rankFor(b.name, b.scryfall?.edhrec_rank) ?? Number.POSITIVE_INFINITY;
+    const ra = rankFor(a.scryfallId) ?? Number.POSITIVE_INFINITY;
+    const rb = rankFor(b.scryfallId) ?? Number.POSITIVE_INFINITY;
     if (ra !== rb) return ra - rb;
     return a.name.localeCompare(b.name);
   });
@@ -137,11 +146,11 @@ async function pick(c: (typeof collection.legendaryCreatures)[number]) {
         >
           <CardImage :name="c.name" :scryfall-id="c.scryfallId" size="normal" hover-preview />
           <span
-            v-if="rankFor(c.name, c.scryfall?.edhrec_rank) !== null"
+            v-if="rankFor(c.scryfallId) !== null"
             class="absolute top-1 right-1 px-1.5 py-0.5 rounded bg-black/80 text-amber-300 text-[10px] font-semibold tabular-nums shadow ring-1 ring-black/40"
             title="EDHREC commander rank"
           >
-            #{{ rankFor(c.name, c.scryfall?.edhrec_rank)?.toLocaleString() }}
+            #{{ rankFor(c.scryfallId)?.toLocaleString() }}
           </span>
           <div class="p-2">
             <div class="font-medium text-sm truncate">{{ c.name }}</div>
