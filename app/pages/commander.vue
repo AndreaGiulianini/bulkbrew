@@ -13,23 +13,26 @@ const pickingName = ref("");
 const pickingScryfallId = ref<string | undefined>(undefined);
 const pickStage = ref<"recs" | "build" | "save" | "done">("recs");
 
-// Live EDHREC commander ranks, keyed by slug. Populated asynchronously after
-// mount so the initial render isn't blocked. Scryfall's edhrec_rank is used as
-// a placeholder until the live value arrives.
+// Live EDHREC commander ranks, keyed by slug. We await this before rendering
+// the grid so the user never sees Scryfall's stale placeholder ranks flicker
+// into the live EDHREC numbers. If the call fails (offline, EDHREC down), we
+// flip `ranksReady` anyway and fall through to Scryfall's rank via `rankFor`.
 const liveRanks = ref<Record<string, number | null>>({});
-const ranksLoading = ref(false);
+const ranksReady = ref(false);
 
 onMounted(async () => {
   await collection.load();
-  void loadLiveRanks();
+  await loadLiveRanks();
 });
 
 async function loadLiveRanks() {
   const slugs = Array.from(
     new Set(collection.legendaryCreatures.map((c) => edhrecSlug(c.name))),
   ).filter(Boolean);
-  if (!slugs.length) return;
-  ranksLoading.value = true;
+  if (!slugs.length) {
+    ranksReady.value = true;
+    return;
+  }
   try {
     const resp = await $fetch<{ ranks: Record<string, number | null> }>("/api/edhrec/ranks", {
       method: "POST",
@@ -39,7 +42,7 @@ async function loadLiveRanks() {
   } catch {
     // Silent — we fall back to Scryfall's rank per-card.
   } finally {
-    ranksLoading.value = false;
+    ranksReady.value = true;
   }
 }
 
@@ -101,8 +104,13 @@ async function pick(c: (typeof collection.legendaryCreatures)[number]) {
       </p>
     </div>
 
-    <div v-if="collection.loading" class="text-neutral-400">Loading collection...</div>
+    <div v-if="collection.loading" class="text-neutral-400">Loading collection…</div>
     <div v-else-if="collection.error" class="text-rose-400">{{ collection.error }}</div>
+    <div v-else-if="!ranksReady" class="py-12 flex flex-col items-center gap-3 text-neutral-400">
+      <div class="w-10 h-10 rounded-full border-4 border-emerald-500/30 border-t-emerald-400 animate-spin" />
+      <div class="text-sm">Fetching EDHREC commander ranks…</div>
+      <div class="text-xs text-neutral-600">Cached locally for 24 h after the first visit.</div>
+    </div>
     <template v-else>
       <input
         v-model="search"
@@ -111,9 +119,8 @@ async function pick(c: (typeof collection.legendaryCreatures)[number]) {
         aria-label="Search commanders"
         class="w-full max-w-md px-3 py-2 rounded bg-neutral-900 border border-neutral-700 focus:outline-none focus:border-emerald-500"
       />
-      <div class="text-sm text-neutral-400 flex items-center gap-2 flex-wrap">
-        <span>{{ filtered.length }} candidates · ordered by EDHREC commander rank</span>
-        <span v-if="ranksLoading" class="text-xs text-neutral-500 animate-pulse">refreshing ranks…</span>
+      <div class="text-sm text-neutral-400">
+        {{ filtered.length }} candidates · ordered by EDHREC commander rank
       </div>
       <div v-if="pickError" class="text-rose-400 text-sm">{{ pickError }}</div>
 
