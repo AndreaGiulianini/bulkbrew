@@ -174,6 +174,18 @@ export interface TopCommander {
   rank: number;
 }
 
+// One row in the /match page's ranked output. `buildability` is the
+// inclusion-weighted % of the commander's typical 99-card deck the user
+// already owns; `ownedCount` / `topCount` is the human-readable variant
+// (count of top-99 EDHREC recs the user owns).
+export interface CommanderMatchResult {
+  commander: TopCommander;
+  buildability: number; // 0–100
+  ownedCount: number;
+  topCount: number; // typically 99, less for sparse commanders
+  owned: boolean;
+}
+
 export interface CategorizedRecs {
   category: string;
   header: string;

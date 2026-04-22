@@ -12,6 +12,7 @@
           <NuxtLink to="/" class="hover:text-white">Sessions</NuxtLink>
           <NuxtLink to="/commander" class="hover:text-white">New deck</NuxtLink>
           <NuxtLink to="/explore" class="hover:text-white">Try any commander</NuxtLink>
+          <NuxtLink to="/match" class="hover:text-white">Find best fit</NuxtLink>
           <NuxtLink to="/collection" class="hover:text-white">Collection</NuxtLink>
         </nav>
       </div>
