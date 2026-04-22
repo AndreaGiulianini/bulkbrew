@@ -25,6 +25,13 @@ are flagged as missing so you know exactly what to buy.
   you don't own and BulkBrew still auto-fills the deck from your collection
   with a clear "Not in collection" badge on the commander tile, so you can
   see how close you are to building it before you buy.
+- **Find best fit** (`/match`) — answers the inverse question: *"given
+  everything I own, which commander would let me build the most-complete
+  deck?"*. Scores EDHREC's top 500 commanders against your collection
+  (inclusion-weighted, color-identity gated, basic lands excluded) and
+  ranks them by buildability %. Streams results as it scores so the top
+  picks appear within seconds; cached per-collection for 1 day so re-runs
+  are instant. Click any result to start a deck — owned or not.
 - **Auto-fill deckbuilder** — picks cards according to:
   - EDHREC's per-commander type composition (creatures, instants, artifacts…)
   - A **per-type cap** so overlay categories (game changers, top cards, high
@@ -164,7 +171,11 @@ Plowshares, Doom Blade → removal. Blasphemous Act, Farewell → wipe.
 - **Commander theme detection isn't implemented yet** (EDHREC's `panels.taglinks`
   is the planned signal, see roadmap).
 - **Partner / Background commander pairs aren't supported** in the explore
-  page — single legendary creatures only for now.
+  or match pages — single legendary creatures only for now.
+- **Find-best-fit pool is the top 500 by EDHREC inclusion**. Long-tail
+  legendaries (rank 500+) won't appear in the ranking. Cold-cache
+  analysis takes ~50–60 s; subsequent runs are instant via a
+  collection-fingerprint cache.
 - **Auto-fill doesn't pad non-land slots** with unowned cards. If your
   collection is small, the deck won't reach 100 — see the recommendations
   panel for what to buy.
@@ -181,7 +192,9 @@ Plowshares, Doom Blade → removal. Blasphemous Act, Farewell → wipe.
 
 - [ ] Commander-theme awareness via `/commanders/<cmdr>/<theme>.json`
 - [ ] Theme-scoped deckbuilding (choose Korvold+Treasure vs Korvold+Aristocrats)
-- [ ] Partner / Background pair support in `/explore`
+- [ ] Partner / Background pair support in `/explore` and `/match`
+- [ ] Deeper match scan (per-color top lists × N pages, ~3000 commanders)
+      behind an opt-in toggle
 - [ ] Pad non-land slots with unowned EDHREC recs (marked as missing-to-buy)
       so decks always reach 100
 - [ ] Retries with exponential backoff against Scryfall/EDHREC
