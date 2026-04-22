@@ -50,6 +50,8 @@ onMounted(async () => {
   void deck.patchMissingScryfallIds();
 });
 
+const commanderOwned = computed(() => deck.session?.cards[0]?.fromCollection !== false);
+
 const sizeColor = computed(() => {
   const s = deck.deckSize;
   if (s === 100) return "text-emerald-400";
@@ -217,6 +219,13 @@ function clearDeck() {
               hover-preview
               eager
             />
+            <span
+              v-if="!commanderOwned"
+              class="absolute bottom-1 left-1 right-1 px-1.5 py-0.5 rounded bg-rose-950/85 text-rose-200 text-[9px] md:text-[10px] font-semibold tracking-wide text-center ring-1 ring-rose-700/60 shadow"
+              title="This commander isn't in your collection — buy or borrow it to play this deck"
+            >
+              Not in collection
+            </span>
           </div>
         </div>
 

@@ -17,10 +17,11 @@
     "nuxt": "^4.4.2",
     "papaparse": "^5.5.3",
     "pinia": "^3.0.4",
-    "vue": "^3.5.32"
+    "vue": "^3.5.33"
   },
   "devDependencies": {
     "@biomejs/biome": "^2.4.12",
-    "@types/papaparse": "^5.5.2"
+    "@types/papaparse": "^5.5.2",
+    "@vite-pwa/nuxt": "^1.1.1"
   }
 }

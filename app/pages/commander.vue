@@ -93,6 +93,8 @@ async function pick(c: CommanderCandidate) {
     deck.startSession({
       name: c.name,
       scryfallId: c.scryfallId,
+      colorIdentity: c.scryfall?.color_identity ?? [],
+      ownedInCollection: true,
       scryfall: c.scryfall,
     });
     await deck.fetchRecs();

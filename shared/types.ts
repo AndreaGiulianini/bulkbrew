@@ -68,6 +68,9 @@ export interface EdhrecPage {
   container: {
     json_dict?: {
       card?: {
+        // Scryfall UUID. Used by /explore to seed the deck session
+        // without a separate Scryfall round-trip.
+        id?: string;
         name: string;
         image_uris?: string[][];
         color_identity?: string[];
@@ -146,10 +149,29 @@ export interface DeckSession {
   name: string;
   commanderName: string;
   commanderScryfallId?: string;
+  // Canonical EDHREC slug (e.g. "atraxa-praetors-voice"). When the session
+  // was started from a commander whose name doesn't slugify cleanly to
+  // EDHREC's URL — most commonly MDFCs picked from the explore page —
+  // this overrides the slug derived from `commanderName`.
+  commanderSlug?: string;
   colorIdentity: string[];
   cards: DeckCard[];
   createdAt: string;
   updatedAt: string;
+}
+
+// A commander entry from EDHREC's top-list endpoints
+// (json.edhrec.com/pages/commanders/{year,month}.json), used by the
+// /explore page's search-and-pick UX. EDHREC's `id` is a Scryfall UUID,
+// so we can render the card image from the CDN without any Scryfall call.
+export interface TopCommander {
+  name: string;
+  slug: string;
+  scryfallId: string;
+  imageUrl?: string;
+  colorIdentity: string[];
+  inclusion: number;
+  rank: number;
 }
 
 export interface CategorizedRecs {

@@ -11,6 +11,7 @@
         <nav class="flex gap-3 sm:gap-4 text-xs sm:text-sm text-neutral-300">
           <NuxtLink to="/" class="hover:text-white">Sessions</NuxtLink>
           <NuxtLink to="/commander" class="hover:text-white">New deck</NuxtLink>
+          <NuxtLink to="/explore" class="hover:text-white">Try any commander</NuxtLink>
           <NuxtLink to="/collection" class="hover:text-white">Collection</NuxtLink>
         </nav>
       </div>
@@ -18,5 +19,6 @@
     <main class="max-w-7xl mx-auto px-3 sm:px-4 py-4 sm:py-6">
       <NuxtPage />
     </main>
+    <PwaUpdatePrompt />
   </div>
 </template>

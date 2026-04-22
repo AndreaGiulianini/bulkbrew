@@ -300,21 +300,42 @@ export const useDeckStore = defineStore("deck", {
   },
 
   actions: {
-    startSession(commander: { name: string; scryfallId?: string; scryfall?: ScryfallCard }) {
+    // `colorIdentity` is required because the autofill's color filter
+    // (and the `categories` getter) silently produces an empty deck when
+    // it's wrong. /commander gets it from the picked card's Scryfall
+    // data; /explore gets it from EDHREC's commander page.
+    //
+    // `ownedInCollection` defaults to true for back-compat with /commander.
+    // /explore passes it explicitly so the commander tile shows "not in
+    // collection" when appropriate.
+    //
+    // `slug` overrides the slug derived from `name`. Needed for
+    // commanders whose display name doesn't slugify to EDHREC's URL —
+    // most commonly MDFCs picked from the explore page's top list.
+    startSession(commander: {
+      name: string;
+      scryfallId?: string;
+      colorIdentity: string[];
+      ownedInCollection?: boolean;
+      slug?: string;
+      scryfall?: ScryfallCard;
+    }) {
       const id = `${edhrecSlug(commander.name)}-${Date.now()}`;
       const now = new Date().toISOString();
+      const owned = commander.ownedInCollection ?? true;
       this.session = {
         id,
         name: commander.name,
         commanderName: commander.name,
         commanderScryfallId: commander.scryfallId,
-        colorIdentity: commander.scryfall?.color_identity ?? [],
+        commanderSlug: commander.slug,
+        colorIdentity: commander.colorIdentity,
         cards: [
           {
             name: commander.name,
             scryfallId: commander.scryfallId,
             category: "commander",
-            fromCollection: true,
+            fromCollection: owned,
             source: "commander",
           },
         ],
@@ -369,7 +390,12 @@ export const useDeckStore = defineStore("deck", {
       try {
         const collection = useCollectionStore();
         const sc = collection.getScryfall(this.session.commanderName);
-        const s = edhrecSlug(sc ? commanderFaceName(sc) : this.session.commanderName);
+        // Session may carry a canonical EDHREC slug (set by /explore from
+        // the top-list `sanitized` field). Prefer it — for MDFCs the
+        // slug derived from `commanderName` won't match EDHREC's URL.
+        const s =
+          this.session.commanderSlug ??
+          edhrecSlug(sc ? commanderFaceName(sc) : this.session.commanderName);
         const data = await getCommanderPage(s);
         if (!data) {
           throw new Error(`EDHREC has no page for "${this.session.commanderName}".`);
