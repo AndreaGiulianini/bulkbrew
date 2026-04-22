@@ -14,10 +14,17 @@ are flagged as missing so you know exactly what to buy.
 ## Features
 
 - **Collection import** — ManaBox CSV, Moxfield collection export, or any
-  plain-text list like `1 Sol Ring`. Names are resolved against Scryfall;
-  anything it couldn't match is surfaced to you, not silently dropped.
-- **Commander picker** — every legendary creature in your collection, ordered
-  by **live** EDHREC commander rank (batched + cached server-side).
+  plain-text list like `1 Sol Ring`. Imports are instant (no Scryfall calls
+  during parse); enrichment happens lazily on the page that needs it.
+  Anything Scryfall couldn't match is surfaced to you, not silently dropped.
+- **Commander picker** (`/commander`) — every legendary creature in your
+  collection, ordered by **live** EDHREC commander rank (batched + cached
+  in IndexedDB).
+- **Try any commander** (`/explore`) — search EDHREC's top ~150 popular
+  commanders or fall back to free-text for the long tail. Pick a commander
+  you don't own and BulkBrew still auto-fills the deck from your collection
+  with a clear "Not in collection" badge on the commander tile, so you can
+  see how close you are to building it before you buy.
 - **Auto-fill deckbuilder** — picks cards according to:
   - EDHREC's per-commander type composition (creatures, instants, artifacts…)
   - A **per-type cap** so overlay categories (game changers, top cards, high
@@ -41,25 +48,39 @@ are flagged as missing so you know exactly what to buy.
   mana curve histogram, color-identity source bar.
 - **Export** — one-click `📋 Copy decklist` (Moxfield / MTGO / Arena
   compatible text format).
-- **Sessions** — auto-saved to disk, reloadable from the homepage.
+- **Sessions** — auto-saved to IndexedDB, reloadable from the homepage.
+- **Offline support (PWA)** — service worker precaches the app shell and
+  permanently caches every card image you've seen (`cards.scryfall.io` URLs
+  are content-addressed and never change). Open a saved deck on a plane and
+  the commander tile, deck list and card art all render. New builds surface
+  a non-blocking "Reload" toast — no surprise refreshes mid-session.
 
 ## Stack
 
-- **[Nuxt 3](https://nuxt.com)** + **Vue 3** (Options API + `<script setup>`)
+- **[Nuxt 4](https://nuxt.com)** + **Vue 3** with `<script setup>` and
+  TypeScript strict mode throughout
 - **[Pinia](https://pinia.vuejs.org)** for state
 - **[Tailwind CSS](https://tailwindcss.com)** with a custom muted-teal /
   tangerine / shadow-grey palette
 - **[Cinzel](https://fonts.google.com/specimen/Cinzel)** (Google Fonts) for
   the wordmark
+- **[@vite-pwa/nuxt](https://vite-pwa-org.netlify.app/frameworks/nuxt)**
+  (Workbox) for the service worker, offline shell, and runtime caching
 - **[Biome](https://biomejs.dev)** for lint + format
 
 **External data**: Scryfall (card data) and EDHREC (commander recommendations
-and themes), called directly from the browser and cached in IndexedDB for
-1 week / 1 day respectively.
+and themes), called directly from the browser. Two layers of caching:
+
+- **App layer** — IndexedDB via `app/utils/storage.ts`: Scryfall cards 7 days,
+  EDHREC pages 1 day, EDHREC top-commanders list 1 day, Scryfall commander
+  catalog 7 days. Opportunistic sweep evicts entries older than 30 days.
+- **Network layer** — service worker (Workbox): `cards.scryfall.io` images
+  CacheFirst 365 days, `api.scryfall.com/cards` CacheFirst 30 days,
+  `json.edhrec.com/pages` NetworkFirst with 3s timeout + 1-day cache fallback.
 
 **Hosting**: pure static site. Deployed to Vercel's hobby tier (free) — no
-serverless functions, no server runtime. Your collection, sessions and the
-external-API cache all live in your browser (IndexedDB).
+serverless functions, no server runtime. Your collection, sessions and both
+cache layers all live in your browser.
 
 ## Quick start
 
@@ -106,23 +127,33 @@ persisted state lives in IndexedDB on your device.
 
 ## How the auto-fill works
 
-1. Add owned EDHREC-recommended lands up to the land target.
-2. Reserve the remaining land slots regardless of what's owned (missing basics
-   are filled later if "Fill gaps" is on).
-3. Fill each EDHREC non-land category (`creatures`, `instants`, `sorceries`,
-   `manaartifacts`, `utilityartifacts`, `enchantments`, `planeswalkers`,
-   `gamechangers`, `highsynergycards`, `topcards`) up to its per-commander
-   target, sorted by `inclusion + synergyWeight × synergy`.
-3. **(3.5)** Role-deficit pass: for ramp / draw / removal / wipes in order,
+Implemented in `app/stores/deck.ts` (`_autoFillImpl`):
+
+1. **Owned EDHREC lands** — add owned non-basic lands EDHREC recommends for
+   this commander, up to the land target.
+2. **Reserve land slots** — reserve the remaining lands so the non-land
+   budget can't crowd them out (filled later by basics or by missing
+   non-basics if "Fill gaps" is on).
+3. **EDHREC non-land categories** — fill each category (`creatures`,
+   `instants`, `sorceries`, `manaartifacts`, `utilityartifacts`,
+   `enchantments`, `planeswalkers`, `gamechangers`, `highsynergycards`,
+   `topcards`) up to its per-commander target, sorted by
+   `inclusion + synergyWeight × synergy`.
+4. **Role-deficit pass** — for ramp / draw / removal / wipes in order,
    pull EDHREC-recommended owned cards that satisfy the role until the
-   target (8/8/5/2) is met, respecting existing type caps.
-4. **(3b)** Spill any remaining owned EDHREC cards past per-category targets,
-   still respecting per-type caps.
-5. **(4)** Generic fallback: any owned non-land card sorted by global
-   `edhrec_rank`, respecting type caps.
-6. **(5)** Pad with owned basic lands up to the land target.
-7. **(6–7)** If "Fill gaps" is on: top off with missing EDHREC non-basic
-   lands and missing basics (marked as *missing*, not owned).
+   target (8 / 8 / 5 / 2) is met, respecting existing type caps.
+5. **Spill** — any remaining owned EDHREC-recommended cards past per-category
+   targets, still respecting per-type caps.
+6. **Generic fallback** — any owned non-land card sorted by global
+   `edhrec_rank`, respecting type caps. A second pass without caps runs
+   if the budget still isn't full.
+7. **Owned basics** — pad with owned basic lands up to the land target.
+8. If **"Fill gaps"** is on: top off with missing EDHREC non-basic lands,
+   then with basics regardless of ownership (both marked as *missing*).
+
+Note: the auto-fill never invents non-land cards you don't own. If your
+collection lacks playable spells in the commander's color identity, the
+deck stops short of 100 — the recommendations panel surfaces the gap.
 
 Functional-role detection is heuristic — regex over Scryfall oracle text in
 `app/utils/card-roles.ts`. Sol Ring, Cultivate etc → ramp. Swords to
@@ -132,20 +163,32 @@ Plowshares, Doom Blade → removal. Blasphemous Act, Farewell → wipe.
 
 - **Commander theme detection isn't implemented yet** (EDHREC's `panels.taglinks`
   is the planned signal, see roadmap).
-- **No retries with true backoff** on external APIs — `ofetch`'s `retry: 1`
-  plus a short delay is "try twice, fail fast".
-- **Single user** — no auth, sessions live on local disk. Fine for personal
-  use; not production.
+- **Partner / Background commander pairs aren't supported** in the explore
+  page — single legendary creatures only for now.
+- **Auto-fill doesn't pad non-land slots** with unowned cards. If your
+  collection is small, the deck won't reach 100 — see the recommendations
+  panel for what to buy.
+- **No retries with true backoff** on external APIs — `$fetch`'s `retry: 1`
+  plus a short delay is "try twice, fail fast". A circuit breaker stops
+  Scryfall batches after 2 consecutive failures (CORS-less 429s prevent
+  reading `Retry-After`).
+- **Single user** — no auth, sessions live in browser IndexedDB. Fine for
+  personal use; not production.
 - **Role detection is heuristic** and will miss edge cases (e.g. Chaos Warp
   isn't counted as removal because it shuffles rather than destroys).
 
 ## Roadmap
 
 - [ ] Commander-theme awareness via `/commanders/<cmdr>/<theme>.json`
-- [ ] Retries with exponential backoff against Scryfall/EDHREC
 - [ ] Theme-scoped deckbuilding (choose Korvold+Treasure vs Korvold+Aristocrats)
+- [ ] Partner / Background pair support in `/explore`
+- [ ] Pad non-land slots with unowned EDHREC recs (marked as missing-to-buy)
+      so decks always reach 100
+- [ ] Retries with exponential backoff against Scryfall/EDHREC
 - [ ] Functional-roles sliders in the Build Rules panel
 - [ ] Per-commander curve targets as a hard bound, not just a tiebreaker
+- [ ] "Refresh data" button to bust both IndexedDB and service-worker caches
+      for a single commander before TTL expiry
 
 ## License
 
